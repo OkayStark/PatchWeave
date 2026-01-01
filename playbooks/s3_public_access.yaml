@@ -1,0 +1,162 @@
+# PatchWeave Playbook v1.0
+# S3 Block Public Access
+
+playbook:
+  # ============================================================================
+  # IDENTIFICATION
+  # ============================================================================
+  id: "550e8400-e29b-41d4-a716-446655440001"
+  name: "S3 Block Public Access"
+  description: |
+    Enables S3 Block Public Access settings on a bucket that is currently 
+    publicly accessible. This is a critical security control that prevents
+    accidental public exposure of S3 bucket contents.
+    
+    This playbook applies all four Block Public Access settings:
+    - BlockPublicAcls: Rejects PUT requests with public ACLs
+    - IgnorePublicAcls: Ignores existing public ACLs
+    - BlockPublicPolicy: Rejects bucket policies that grant public access
+    - RestrictPublicBuckets: Restricts access to buckets with public policies
+
+  # ============================================================================
+  # CLASSIFICATION
+  # ============================================================================
+  vulnerability_type: "s3_public_access"
+  cloud_provider: "AWS"
+  resource_type: "AWS::S3::Bucket"
+  severity: "Critical"
+
+  # ============================================================================
+  # SEMANTIC SEARCH
+  # Text used for embedding - should include various phrasings
+  # ============================================================================
+  search_text: |
+    S3 bucket public access enabled
+    publicly accessible bucket
+    S3 bucket ACL public
+    block public access disabled
+    S3 public read write access
+    bucket policy allows public
+    S3 bucket exposed to internet
+    S3 bucket misconfiguration public
+    AWS S3 public bucket security
+
+  # ============================================================================
+  # EXECUTABLE CODE
+  # All code uses {{TOKEN}} placeholders for sensitive values
+  # ============================================================================
+  
+  # Pre-check: Verify the vulnerability exists
+  # Should return True if vulnerability is present (needs fixing)
+  pre_check_code: |
+    import boto3
+    from botocore.exceptions import ClientError
+    
+    s3 = boto3.client('s3', region_name='{{AWS_REGION}}')
+    
+    try:
+        response = s3.get_public_access_block(Bucket='{{BUCKET_NAME}}')
+        config = response['PublicAccessBlockConfiguration']
+        
+        # Check if ALL settings are True (fully blocked)
+        is_fully_blocked = all([
+            config.get('BlockPublicAcls', False),
+            config.get('IgnorePublicAcls', False),
+            config.get('BlockPublicPolicy', False),
+            config.get('RestrictPublicBuckets', False)
+        ])
+        
+        if not is_fully_blocked:
+            print("VULNERABILITY CONFIRMED: Public access not fully blocked")
+            print(f"Current settings: {config}")
+        else:
+            print("No vulnerability: Block Public Access is already fully enabled")
+            
+        # Return True if vulnerable (needs fixing)
+        result = not is_fully_blocked
+        
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchPublicAccessBlockConfiguration':
+            # No public access block config = vulnerable
+            print("VULNERABILITY CONFIRMED: No public access block configuration exists")
+            result = True
+        else:
+            raise
+    
+    result
+
+  # Remediation: Fix the vulnerability
+  remediation_code: |
+    import boto3
+    
+    s3 = boto3.client('s3', region_name='{{AWS_REGION}}')
+    
+    # Enable all Block Public Access settings
+    s3.put_public_access_block(
+        Bucket='{{BUCKET_NAME}}',
+        PublicAccessBlockConfiguration={
+            'BlockPublicAcls': True,
+            'IgnorePublicAcls': True,
+            'BlockPublicPolicy': True,
+            'RestrictPublicBuckets': True
+        }
+    )
+    
+    print(f"Successfully enabled Block Public Access for bucket: {{BUCKET_NAME}}")
+
+  # Post-check: Verify the fix worked
+  # Should return True if fix was successful
+  post_check_code: |
+    import boto3
+    
+    s3 = boto3.client('s3', region_name='{{AWS_REGION}}')
+    
+    response = s3.get_public_access_block(Bucket='{{BUCKET_NAME}}')
+    config = response['PublicAccessBlockConfiguration']
+    
+    # Verify ALL settings are now True
+    checks = {
+        'BlockPublicAcls': config.get('BlockPublicAcls', False),
+        'IgnorePublicAcls': config.get('IgnorePublicAcls', False),
+        'BlockPublicPolicy': config.get('BlockPublicPolicy', False),
+        'RestrictPublicBuckets': config.get('RestrictPublicBuckets', False),
+    }
+    
+    all_enabled = all(checks.values())
+    
+    if all_enabled:
+        print("REMEDIATION VERIFIED: All Block Public Access settings are enabled")
+    else:
+        failed = [k for k, v in checks.items() if not v]
+        print(f"REMEDIATION FAILED: The following settings are not enabled: {failed}")
+    
+    all_enabled
+
+  # ============================================================================
+  # METADATA
+  # ============================================================================
+  created_at: "2026-01-16T00:00:00Z"
+  created_by: "PatchWeave Team"
+  version: "1.0.0"
+  
+  # IAM permissions required to execute this playbook
+  required_permissions:
+    - "s3:GetPublicAccessBlock"
+    - "s3:PutPublicAccessBlock"
+  
+  # Estimated time to execute remediation (seconds)
+  estimated_execution_time_seconds: 5
+  
+  # Tags for categorization
+  tags:
+    - "s3"
+    - "storage"
+    - "public-access"
+    - "critical"
+  
+  # Compliance frameworks
+  compliance_frameworks:
+    - "CIS AWS Foundations 2.1.5"
+    - "SOC2"
+    - "PCI-DSS"
+    - "HIPAA"

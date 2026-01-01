@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # ============================================================================
+  # LocalStack - AWS Simulation
+  # ============================================================================
+  localstack:
+    image: localstack/localstack:3.0
+    container_name: patchweave-localstack
+    ports:
+      - "4566:4566"            # LocalStack gateway (all services)
+      - "4510-4559:4510-4559"  # External services port range
+    environment:
+      - SERVICES=s3,ec2,rds,iam,cloudtrail,logs,sts,kms,vpc
+      - DEBUG=1
+      - PERSISTENCE=1
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - LOCALSTACK_HOST=localhost
+    volumes:
+      - "./localstack_data:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - patchweave-network
+
+  # ============================================================================
+  # ChromaDB - Vector Database for Playbooks
+  # ============================================================================
+  chromadb:
+    image: chromadb/chroma:0.4.22
+    container_name: patchweave-chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - "./chroma_data:/chroma/chroma"
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+      - ALLOW_RESET=TRUE
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - patchweave-network
+
+  # ============================================================================
+  # PatchWeave Application (optional - for containerized deployment)
+  # ============================================================================
+  patchweave:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: patchweave-app
+    ports:
+      - "8080:8080"
+    environment:
+      - PATCHWEAVE_ENV=development
+      - LOCALSTACK_ENDPOINT=http://localstack:4566
+      - USE_LOCALSTACK=true
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - LOG_LEVEL=INFO
+    env_file:
+      - .env
+    depends_on:
+      localstack:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes:
+      - "./playbooks:/app/playbooks:ro"
+      - "./logs:/app/logs"
+    networks:
+      - patchweave-network
+    profiles:
+      - full  # Only starts with: docker-compose --profile full up
+
+networks:
+  patchweave-network:
+    driver: bridge
+    name: patchweave-network
+
+volumes:
+  localstack_data:
+    driver: local
+  chroma_data:
+    driver: local
