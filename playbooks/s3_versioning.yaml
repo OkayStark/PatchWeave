@@ -1,0 +1,81 @@
+id: "playbook-s3-versioning"
+name: "S3 Bucket Versioning Enablement"
+description: "Enable versioning on S3 buckets for data protection and recovery"
+vulnerability_type: s3_versioning_disabled
+cloud_provider: AWS
+resource_type: "AWS::S3::Bucket"
+severity: Medium
+version: "1.0.0"
+
+search_text: |
+  S3 bucket versioning disabled not enabled data protection recovery
+  AWS S3 bucket versioning configuration backup restore compliance
+
+tags:
+  - s3
+  - versioning
+  - data-protection
+  - backup
+
+compliance_frameworks:
+  - "CIS AWS 2.1.3"
+  - "SOC 2 A1.2"
+  - "NIST 800-53 CP-9"
+
+required_permissions:
+  - s3:GetBucketVersioning
+  - s3:PutBucketVersioning
+
+estimated_execution_time_seconds: 10
+
+pre_check_code: |
+  import boto3
+  
+  def pre_check(bucket_name: str, **kwargs) -> dict:
+      """Check if S3 bucket has versioning enabled."""
+      s3 = boto3.client('s3', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      try:
+          response = s3.get_bucket_versioning(Bucket=bucket_name)
+          status = response.get('Status', 'Disabled')
+          
+          return {
+              "needs_remediation": status != 'Enabled',
+              "versioning_status": status,
+              "mfa_delete": response.get('MFADelete', 'Disabled')
+          }
+      except s3.exceptions.NoSuchBucket:
+          return {"needs_remediation": False, "error": "Bucket not found"}
+
+remediation_code: |
+  import boto3
+  
+  def remediate(bucket_name: str, **kwargs) -> dict:
+      """Enable versioning on the S3 bucket."""
+      s3 = boto3.client('s3', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      s3.put_bucket_versioning(
+          Bucket=bucket_name,
+          VersioningConfiguration={'Status': 'Enabled'}
+      )
+      
+      return {
+          "success": True,
+          "action": "versioning_enabled",
+          "bucket": bucket_name
+      }
+
+post_check_code: |
+  import boto3
+  
+  def post_check(bucket_name: str, **kwargs) -> dict:
+      """Verify versioning is now enabled."""
+      s3 = boto3.client('s3', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      response = s3.get_bucket_versioning(Bucket=bucket_name)
+      status = response.get('Status', 'Disabled')
+      
+      return {
+          "verified": status == 'Enabled',
+          "versioning_status": status
+      }

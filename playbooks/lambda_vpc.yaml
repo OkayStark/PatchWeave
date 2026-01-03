@@ -1,0 +1,128 @@
+id: "playbook-lambda-vpc"
+name: "Lambda VPC Configuration"
+description: "Configure Lambda functions to run within a VPC for network isolation"
+vulnerability_type: lambda_public
+cloud_provider: AWS
+resource_type: "AWS::Lambda::Function"
+severity: Medium
+version: "1.0.0"
+
+search_text: |
+  Lambda function VPC configuration network isolation public internet
+  AWS Lambda not in VPC network security private subnet
+
+tags:
+  - lambda
+  - vpc
+  - network
+  - serverless
+
+compliance_frameworks:
+  - "CIS AWS 2.9"
+  - "SOC 2 CC6.6"
+  - "NIST 800-53 SC-7"
+
+required_permissions:
+  - lambda:GetFunction
+  - lambda:UpdateFunctionConfiguration
+  - ec2:DescribeVpcs
+  - ec2:DescribeSubnets
+  - ec2:DescribeSecurityGroups
+
+estimated_execution_time_seconds: 45
+
+pre_check_code: |
+  import boto3
+  
+  def pre_check(function_name: str, **kwargs) -> dict:
+      """Check if Lambda function is configured to run in a VPC."""
+      lambda_client = boto3.client('lambda', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      try:
+          response = lambda_client.get_function(FunctionName=function_name)
+          config = response['Configuration']
+          vpc_config = config.get('VpcConfig', {})
+          
+          has_vpc = bool(vpc_config.get('VpcId'))
+          
+          return {
+              "needs_remediation": not has_vpc,
+              "has_vpc_config": has_vpc,
+              "vpc_id": vpc_config.get('VpcId'),
+              "subnet_ids": vpc_config.get('SubnetIds', []),
+              "security_group_ids": vpc_config.get('SecurityGroupIds', []),
+              "runtime": config.get('Runtime')
+          }
+      except lambda_client.exceptions.ResourceNotFoundException:
+          return {"needs_remediation": False, "error": "Function not found"}
+
+remediation_code: |
+  import boto3
+  
+  def remediate(function_name: str, vpc_id: str = None, subnet_ids: list = None, 
+                security_group_ids: list = None, **kwargs) -> dict:
+      """Configure Lambda function to run within a VPC."""
+      lambda_client = boto3.client('lambda', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      ec2 = boto3.client('ec2', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      # If VPC config not provided, use default VPC
+      if not vpc_id:
+          vpcs = ec2.describe_vpcs(Filters=[{'Name': 'isDefault', 'Values': ['true']}])
+          if vpcs['Vpcs']:
+              vpc_id = vpcs['Vpcs'][0]['VpcId']
+          else:
+              vpcs = ec2.describe_vpcs()
+              if vpcs['Vpcs']:
+                  vpc_id = vpcs['Vpcs'][0]['VpcId']
+              else:
+                  return {"success": False, "error": "No VPC available"}
+      
+      # Get subnets if not provided
+      if not subnet_ids:
+          subnets = ec2.describe_subnets(Filters=[{'Name': 'vpc-id', 'Values': [vpc_id]}])
+          subnet_ids = [s['SubnetId'] for s in subnets['Subnets'][:2]]
+      
+      # Get or create security group
+      if not security_group_ids:
+          sgs = ec2.describe_security_groups(
+              Filters=[{'Name': 'vpc-id', 'Values': [vpc_id]}]
+          )
+          security_group_ids = [sgs['SecurityGroups'][0]['GroupId']]
+      
+      # Update function
+      lambda_client.update_function_configuration(
+          FunctionName=function_name,
+          VpcConfig={
+              'SubnetIds': subnet_ids,
+              'SecurityGroupIds': security_group_ids
+          }
+      )
+      
+      return {
+          "success": True,
+          "action": "vpc_configured",
+          "function_name": function_name,
+          "vpc_id": vpc_id,
+          "subnet_ids": subnet_ids,
+          "security_group_ids": security_group_ids
+      }
+
+post_check_code: |
+  import boto3
+  import time
+  
+  def post_check(function_name: str, **kwargs) -> dict:
+      """Verify Lambda function is now in a VPC."""
+      lambda_client = boto3.client('lambda', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      # Wait for update to complete
+      time.sleep(5)
+      
+      response = lambda_client.get_function(FunctionName=function_name)
+      vpc_config = response['Configuration'].get('VpcConfig', {})
+      
+      return {
+          "verified": bool(vpc_config.get('VpcId')),
+          "vpc_id": vpc_config.get('VpcId'),
+          "subnet_count": len(vpc_config.get('SubnetIds', []))
+      }

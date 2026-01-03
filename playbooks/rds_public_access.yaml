@@ -1,0 +1,95 @@
+id: "playbook-rds-public"
+name: "RDS Public Accessibility Remediation"
+description: "Disable public accessibility for RDS instances that should be private"
+vulnerability_type: rds_publicly_accessible
+cloud_provider: AWS
+resource_type: "AWS::RDS::DBInstance"
+severity: Critical
+version: "1.0.0"
+
+search_text: |
+  RDS database public accessible publicly internet exposed endpoint
+  AWS RDS instance public access enabled private database security
+
+tags:
+  - rds
+  - database
+  - public-access
+  - network-security
+
+compliance_frameworks:
+  - "CIS AWS 2.3.1"
+  - "SOC 2 CC6.6"
+  - "PCI DSS 1.3"
+
+required_permissions:
+  - rds:DescribeDBInstances
+  - rds:ModifyDBInstance
+
+estimated_execution_time_seconds: 300
+
+pre_check_code: |
+  import boto3
+  
+  def pre_check(db_instance_identifier: str, **kwargs) -> dict:
+      """Check if RDS instance is publicly accessible."""
+      rds = boto3.client('rds', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      response = rds.describe_db_instances(DBInstanceIdentifier=db_instance_identifier)
+      
+      if not response['DBInstances']:
+          return {"needs_remediation": False, "error": "RDS instance not found"}
+      
+      db = response['DBInstances'][0]
+      is_public = db.get('PubliclyAccessible', False)
+      
+      return {
+          "needs_remediation": is_public,
+          "publicly_accessible": is_public,
+          "db_instance_class": db.get('DBInstanceClass'),
+          "engine": db.get('Engine'),
+          "endpoint": db.get('Endpoint', {}).get('Address')
+      }
+
+remediation_code: |
+  import boto3
+  
+  def remediate(db_instance_identifier: str, **kwargs) -> dict:
+      """Disable public accessibility for the RDS instance."""
+      rds = boto3.client('rds', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      rds.modify_db_instance(
+          DBInstanceIdentifier=db_instance_identifier,
+          PubliclyAccessible=False,
+          ApplyImmediately=True
+      )
+      
+      return {
+          "success": True,
+          "action": "public_access_disabled",
+          "db_instance": db_instance_identifier,
+          "note": "Changes may take a few minutes to apply"
+      }
+
+post_check_code: |
+  import boto3
+  import time
+  
+  def post_check(db_instance_identifier: str, **kwargs) -> dict:
+      """Verify RDS instance is no longer publicly accessible."""
+      rds = boto3.client('rds', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      # Wait briefly for modification to start
+      time.sleep(5)
+      
+      response = rds.describe_db_instances(DBInstanceIdentifier=db_instance_identifier)
+      db = response['DBInstances'][0]
+      
+      status = db.get('DBInstanceStatus')
+      is_public = db.get('PubliclyAccessible', True)
+      
+      return {
+          "verified": not is_public or status == "modifying",
+          "publicly_accessible": is_public,
+          "status": status
+      }

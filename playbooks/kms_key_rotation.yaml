@@ -1,0 +1,109 @@
+id: "playbook-kms-rotation"
+name: "KMS Key Rotation Enablement"
+description: "Enable automatic key rotation for KMS customer managed keys"
+vulnerability_type: kms_key_rotation_disabled
+cloud_provider: AWS
+resource_type: "AWS::KMS::Key"
+severity: Medium
+version: "1.0.0"
+
+search_text: |
+  KMS key rotation disabled automatic rotation customer managed key CMK
+  AWS KMS encryption key rotation not enabled security compliance
+
+tags:
+  - kms
+  - encryption
+  - key-rotation
+  - security
+
+compliance_frameworks:
+  - "CIS AWS 2.8"
+  - "SOC 2 CC6.1"
+  - "PCI DSS 3.6.4"
+
+required_permissions:
+  - kms:DescribeKey
+  - kms:GetKeyRotationStatus
+  - kms:EnableKeyRotation
+
+estimated_execution_time_seconds: 10
+
+pre_check_code: |
+  import boto3
+  
+  def pre_check(key_id: str, **kwargs) -> dict:
+      """Check if KMS key has automatic rotation enabled."""
+      kms = boto3.client('kms', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      try:
+          # Get key details
+          key_info = kms.describe_key(KeyId=key_id)
+          key_metadata = key_info['KeyMetadata']
+          
+          # Skip AWS managed keys
+          if key_metadata.get('KeyManager') == 'AWS':
+              return {
+                  "needs_remediation": False,
+                  "reason": "AWS managed keys have automatic rotation"
+              }
+          
+          # Check rotation status
+          rotation = kms.get_key_rotation_status(KeyId=key_id)
+          rotation_enabled = rotation.get('KeyRotationEnabled', False)
+          
+          return {
+              "needs_remediation": not rotation_enabled,
+              "rotation_enabled": rotation_enabled,
+              "key_state": key_metadata.get('KeyState'),
+              "key_manager": key_metadata.get('KeyManager')
+          }
+      except kms.exceptions.NotFoundException:
+          return {"needs_remediation": False, "error": "Key not found"}
+
+remediation_code: |
+  import boto3
+  
+  def remediate(key_id: str, **kwargs) -> dict:
+      """Enable automatic key rotation for the KMS key."""
+      kms = boto3.client('kms', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      # Verify key is customer managed and enabled
+      key_info = kms.describe_key(KeyId=key_id)
+      key_metadata = key_info['KeyMetadata']
+      
+      if key_metadata.get('KeyManager') == 'AWS':
+          return {
+              "success": False,
+              "reason": "Cannot modify rotation for AWS managed keys"
+          }
+      
+      if key_metadata.get('KeyState') != 'Enabled':
+          return {
+              "success": False,
+              "reason": f"Key state is {key_metadata.get('KeyState')}, must be Enabled"
+          }
+      
+      # Enable rotation
+      kms.enable_key_rotation(KeyId=key_id)
+      
+      return {
+          "success": True,
+          "action": "key_rotation_enabled",
+          "key_id": key_id,
+          "rotation_period": "365 days"
+      }
+
+post_check_code: |
+  import boto3
+  
+  def post_check(key_id: str, **kwargs) -> dict:
+      """Verify key rotation is now enabled."""
+      kms = boto3.client('kms', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      rotation = kms.get_key_rotation_status(KeyId=key_id)
+      
+      return {
+          "verified": rotation.get('KeyRotationEnabled', False),
+          "rotation_enabled": rotation.get('KeyRotationEnabled')
+      }

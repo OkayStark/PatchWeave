@@ -1,0 +1,130 @@
+id: "playbook-ebs-encryption"
+name: "EBS Volume Encryption Remediation"
+description: "Enable encryption for unencrypted EBS volumes by creating encrypted snapshots"
+vulnerability_type: ebs_unencrypted
+cloud_provider: AWS
+resource_type: "AWS::EC2::Volume"
+severity: High
+version: "1.0.0"
+
+search_text: |
+  EBS volume encryption unencrypted disk storage data at rest
+  AWS EC2 EBS volume not encrypted security compliance data protection
+
+tags:
+  - ebs
+  - encryption
+  - ec2
+  - storage
+
+compliance_frameworks:
+  - "CIS AWS 2.2.1"
+  - "HIPAA 164.312(a)(2)(iv)"
+  - "SOC 2 CC6.1"
+
+required_permissions:
+  - ec2:DescribeVolumes
+  - ec2:CreateSnapshot
+  - ec2:CopySnapshot
+  - ec2:CreateVolume
+  - ec2:DeleteVolume
+  - ec2:DetachVolume
+  - ec2:AttachVolume
+
+estimated_execution_time_seconds: 600
+
+pre_check_code: |
+  import boto3
+  
+  def pre_check(volume_id: str, **kwargs) -> dict:
+      """Check if EBS volume is unencrypted."""
+      ec2 = boto3.client('ec2', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      response = ec2.describe_volumes(VolumeIds=[volume_id])
+      
+      if not response['Volumes']:
+          return {"needs_remediation": False, "error": "Volume not found"}
+      
+      volume = response['Volumes'][0]
+      is_encrypted = volume.get('Encrypted', False)
+      
+      return {
+          "needs_remediation": not is_encrypted,
+          "encrypted": is_encrypted,
+          "volume_type": volume.get('VolumeType'),
+          "size_gb": volume.get('Size'),
+          "state": volume.get('State'),
+          "attachments": len(volume.get('Attachments', []))
+      }
+
+remediation_code: |
+  import boto3
+  import time
+  
+  def remediate(volume_id: str, kms_key_id: str = None, **kwargs) -> dict:
+      """
+      Create an encrypted copy of the EBS volume.
+      
+      Note: This creates a new encrypted volume. The original must be
+      manually replaced if attached to an instance.
+      """
+      ec2 = boto3.client('ec2', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      # Get original volume details
+      volume = ec2.describe_volumes(VolumeIds=[volume_id])['Volumes'][0]
+      
+      # Create snapshot of original volume
+      snapshot = ec2.create_snapshot(
+          VolumeId=volume_id,
+          Description=f'PatchWeave encryption migration - {volume_id}'
+      )
+      snapshot_id = snapshot['SnapshotId']
+      
+      # Wait for snapshot to complete
+      waiter = ec2.get_waiter('snapshot_completed')
+      waiter.wait(SnapshotIds=[snapshot_id])
+      
+      # Create encrypted volume from snapshot
+      create_params = {
+          'SnapshotId': snapshot_id,
+          'AvailabilityZone': volume['AvailabilityZone'],
+          'VolumeType': volume['VolumeType'],
+          'Encrypted': True,
+          'TagSpecifications': [{
+              'ResourceType': 'volume',
+              'Tags': [{'Key': 'CreatedBy', 'Value': 'PatchWeave'}]
+          }]
+      }
+      
+      if kms_key_id:
+          create_params['KmsKeyId'] = kms_key_id
+      
+      new_volume = ec2.create_volume(**create_params)
+      
+      return {
+          "success": True,
+          "action": "encrypted_volume_created",
+          "original_volume": volume_id,
+          "new_encrypted_volume": new_volume['VolumeId'],
+          "snapshot_id": snapshot_id,
+          "note": "Replace original volume with new encrypted volume manually"
+      }
+
+post_check_code: |
+  import boto3
+  
+  def post_check(volume_id: str, new_volume_id: str = None, **kwargs) -> dict:
+      """Verify the new encrypted volume exists."""
+      ec2 = boto3.client('ec2', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      if new_volume_id:
+          response = ec2.describe_volumes(VolumeIds=[new_volume_id])
+          if response['Volumes']:
+              volume = response['Volumes'][0]
+              return {
+                  "verified": volume.get('Encrypted', False),
+                  "new_volume_encrypted": volume.get('Encrypted'),
+                  "state": volume.get('State')
+              }
+      
+      return {"verified": False, "note": "New volume ID required for verification"}

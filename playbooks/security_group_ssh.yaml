@@ -1,0 +1,115 @@
+id: "playbook-security-group-ssh"
+name: "Security Group SSH Restriction"
+description: "Remove unrestricted SSH access (0.0.0.0/0 on port 22) from security groups"
+vulnerability_type: security_group_open_ssh
+cloud_provider: AWS
+resource_type: "AWS::EC2::SecurityGroup"
+severity: Critical
+version: "1.0.0"
+
+search_text: |
+  Security group SSH port 22 open unrestricted 0.0.0.0/0 inbound rule EC2
+  AWS security group allows SSH from anywhere internet exposed open access
+
+tags:
+  - security-group
+  - ssh
+  - port-22
+  - network-security
+
+compliance_frameworks:
+  - "CIS AWS 5.2"
+  - "PCI DSS 1.2.1"
+  - "NIST 800-53 SC-7"
+
+required_permissions:
+  - ec2:DescribeSecurityGroups
+  - ec2:RevokeSecurityGroupIngress
+  - ec2:AuthorizeSecurityGroupIngress
+
+estimated_execution_time_seconds: 20
+
+pre_check_code: |
+  import boto3
+  
+  def pre_check(security_group_id: str, **kwargs) -> dict:
+      """Check if security group has unrestricted SSH access."""
+      ec2 = boto3.client('ec2', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      response = ec2.describe_security_groups(GroupIds=[security_group_id])
+      
+      if not response['SecurityGroups']:
+          return {"needs_remediation": False, "error": "Security group not found"}
+      
+      sg = response['SecurityGroups'][0]
+      open_ssh_rules = []
+      
+      for rule in sg.get('IpPermissions', []):
+          if rule.get('FromPort') == 22 and rule.get('ToPort') == 22:
+              for ip_range in rule.get('IpRanges', []):
+                  if ip_range.get('CidrIp') == '0.0.0.0/0':
+                      open_ssh_rules.append(rule)
+                      
+      return {
+          "needs_remediation": len(open_ssh_rules) > 0,
+          "open_rules_count": len(open_ssh_rules),
+          "security_group_name": sg.get('GroupName')
+      }
+
+remediation_code: |
+  import boto3
+  
+  def remediate(security_group_id: str, allowed_cidr: str = "10.0.0.0/8", **kwargs) -> dict:
+      """Remove 0.0.0.0/0 SSH rule and optionally add restricted CIDR."""
+      ec2 = boto3.client('ec2', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      # Revoke the open SSH rule
+      ec2.revoke_security_group_ingress(
+          GroupId=security_group_id,
+          IpPermissions=[{
+              'IpProtocol': 'tcp',
+              'FromPort': 22,
+              'ToPort': 22,
+              'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+          }]
+      )
+      
+      # Optionally add restricted SSH access
+      if allowed_cidr:
+          ec2.authorize_security_group_ingress(
+              GroupId=security_group_id,
+              IpPermissions=[{
+                  'IpProtocol': 'tcp',
+                  'FromPort': 22,
+                  'ToPort': 22,
+                  'IpRanges': [{
+                      'CidrIp': allowed_cidr,
+                      'Description': 'Restricted SSH access - PatchWeave remediation'
+                  }]
+              }]
+          )
+      
+      return {
+          "success": True,
+          "action": "ssh_restricted",
+          "removed_cidr": "0.0.0.0/0",
+          "added_cidr": allowed_cidr
+      }
+
+post_check_code: |
+  import boto3
+  
+  def post_check(security_group_id: str, **kwargs) -> dict:
+      """Verify SSH is no longer open to 0.0.0.0/0."""
+      ec2 = boto3.client('ec2', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      response = ec2.describe_security_groups(GroupIds=[security_group_id])
+      sg = response['SecurityGroups'][0]
+      
+      for rule in sg.get('IpPermissions', []):
+          if rule.get('FromPort') == 22 and rule.get('ToPort') == 22:
+              for ip_range in rule.get('IpRanges', []):
+                  if ip_range.get('CidrIp') == '0.0.0.0/0':
+                      return {"verified": False, "open_ssh_still_present": True}
+      
+      return {"verified": True, "open_ssh_removed": True}

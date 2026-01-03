@@ -1,0 +1,106 @@
+id: "playbook-s3-encryption"
+name: "S3 Bucket Encryption Remediation"
+description: "Enable server-side encryption (AES-256) for S3 buckets that lack encryption configuration"
+vulnerability_type: s3_encryption_disabled
+cloud_provider: AWS
+resource_type: "AWS::S3::Bucket"
+severity: High
+version: "1.0.0"
+
+search_text: |
+  S3 bucket encryption server-side AES-256 SSE KMS unencrypted data at rest
+  AWS S3 bucket missing encryption configuration security compliance data protection
+
+tags:
+  - s3
+  - encryption
+  - data-at-rest
+  - compliance
+
+compliance_frameworks:
+  - "CIS AWS 2.1.1"
+  - "SOC 2 CC6.1"
+  - "HIPAA 164.312(a)(2)(iv)"
+
+required_permissions:
+  - s3:GetBucketEncryption
+  - s3:PutBucketEncryption
+
+estimated_execution_time_seconds: 15
+
+pre_check_code: |
+  import boto3
+  from botocore.exceptions import ClientError
+  
+  def pre_check(bucket_name: str, **kwargs) -> dict:
+      """Check if S3 bucket lacks encryption configuration."""
+      s3 = boto3.client('s3', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      try:
+          response = s3.get_bucket_encryption(Bucket=bucket_name)
+          rules = response.get('ServerSideEncryptionConfiguration', {}).get('Rules', [])
+          
+          if rules:
+              return {
+                  "needs_remediation": False,
+                  "current_state": "encrypted",
+                  "encryption_type": rules[0].get('ApplyServerSideEncryptionByDefault', {}).get('SSEAlgorithm', 'unknown')
+              }
+      except ClientError as e:
+          if e.response['Error']['Code'] == 'ServerSideEncryptionConfigurationNotFoundError':
+              return {
+                  "needs_remediation": True,
+                  "current_state": "unencrypted",
+                  "message": "No encryption configuration found"
+              }
+          raise
+      
+      return {"needs_remediation": True, "current_state": "unencrypted"}
+
+remediation_code: |
+  import boto3
+  
+  def remediate(bucket_name: str, **kwargs) -> dict:
+      """Enable AES-256 server-side encryption for the S3 bucket."""
+      s3 = boto3.client('s3', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      encryption_config = {
+          'Rules': [{
+              'ApplyServerSideEncryptionByDefault': {
+                  'SSEAlgorithm': 'AES256'
+              },
+              'BucketKeyEnabled': True
+          }]
+      }
+      
+      s3.put_bucket_encryption(
+          Bucket=bucket_name,
+          ServerSideEncryptionConfiguration=encryption_config
+      )
+      
+      return {
+          "success": True,
+          "action": "enabled_encryption",
+          "encryption_type": "AES256",
+          "bucket": bucket_name
+      }
+
+post_check_code: |
+  import boto3
+  
+  def post_check(bucket_name: str, **kwargs) -> dict:
+      """Verify encryption is now enabled on the bucket."""
+      s3 = boto3.client('s3', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      response = s3.get_bucket_encryption(Bucket=bucket_name)
+      rules = response.get('ServerSideEncryptionConfiguration', {}).get('Rules', [])
+      
+      if rules:
+          algorithm = rules[0].get('ApplyServerSideEncryptionByDefault', {}).get('SSEAlgorithm')
+          return {
+              "verified": True,
+              "encryption_enabled": True,
+              "algorithm": algorithm
+          }
+      
+      return {"verified": False, "encryption_enabled": False}

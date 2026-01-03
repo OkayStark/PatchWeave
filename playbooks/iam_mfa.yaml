@@ -1,0 +1,106 @@
+id: "playbook-iam-mfa"
+name: "IAM User MFA Enforcement"
+description: "Enable MFA for IAM users without multi-factor authentication configured"
+vulnerability_type: iam_mfa_disabled
+cloud_provider: AWS
+resource_type: "AWS::IAM::User"
+severity: High
+version: "1.0.0"
+
+search_text: |
+  IAM user MFA multi-factor authentication disabled not enabled 2FA
+  AWS IAM user account security MFA not configured two factor authentication
+
+tags:
+  - iam
+  - mfa
+  - authentication
+  - user-security
+
+compliance_frameworks:
+  - "CIS AWS 1.10"
+  - "SOC 2 CC6.1"
+  - "NIST 800-53 IA-2"
+
+required_permissions:
+  - iam:ListUsers
+  - iam:ListMFADevices
+  - iam:CreateVirtualMFADevice
+  - iam:EnableMFADevice
+
+estimated_execution_time_seconds: 30
+
+pre_check_code: |
+  import boto3
+  
+  def pre_check(user_name: str, **kwargs) -> dict:
+      """Check if IAM user has MFA enabled."""
+      iam = boto3.client('iam', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      try:
+          response = iam.list_mfa_devices(UserName=user_name)
+          mfa_devices = response.get('MFADevices', [])
+          
+          return {
+              "needs_remediation": len(mfa_devices) == 0,
+              "mfa_enabled": len(mfa_devices) > 0,
+              "mfa_device_count": len(mfa_devices),
+              "user_name": user_name
+          }
+      except iam.exceptions.NoSuchEntityException:
+          return {"needs_remediation": False, "error": "User not found"}
+
+remediation_code: |
+  import boto3
+  
+  def remediate(user_name: str, **kwargs) -> dict:
+      """
+      Create a virtual MFA device for the IAM user.
+      
+      Note: MFA activation requires user interaction to scan QR code.
+      This creates the device but doesn't fully activate it.
+      """
+      iam = boto3.client('iam', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      # Create virtual MFA device
+      mfa_device = iam.create_virtual_mfa_device(
+          VirtualMFADeviceName=f'{user_name}-mfa-device'
+      )
+      
+      serial_number = mfa_device['VirtualMFADevice']['SerialNumber']
+      
+      # Note: Full activation requires the user to:
+      # 1. Scan QR code (Base32StringSeed or QRCodePNG)
+      # 2. Provide two consecutive TOTP codes
+      
+      return {
+          "success": True,
+          "action": "mfa_device_created",
+          "user_name": user_name,
+          "serial_number": serial_number,
+          "note": "User must complete MFA activation by scanning QR code"
+      }
+
+post_check_code: |
+  import boto3
+  
+  def post_check(user_name: str, **kwargs) -> dict:
+      """Check if MFA device was created (may not be fully activated)."""
+      iam = boto3.client('iam', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      # Check for virtual MFA devices
+      response = iam.list_virtual_mfa_devices()
+      
+      user_mfa = [
+          d for d in response.get('VirtualMFADevices', [])
+          if user_name in d.get('SerialNumber', '')
+      ]
+      
+      # Also check enabled MFA
+      enabled = iam.list_mfa_devices(UserName=user_name)
+      
+      return {
+          "verified": len(user_mfa) > 0 or len(enabled.get('MFADevices', [])) > 0,
+          "mfa_device_created": len(user_mfa) > 0,
+          "mfa_fully_enabled": len(enabled.get('MFADevices', [])) > 0
+      }

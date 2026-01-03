@@ -1,0 +1,134 @@
+id: "playbook-cloudtrail-logging"
+name: "CloudTrail Logging Enablement"
+description: "Enable CloudTrail logging in regions where it is disabled"
+vulnerability_type: cloudtrail_disabled
+cloud_provider: AWS
+resource_type: "AWS::CloudTrail::Trail"
+severity: High
+version: "1.0.0"
+
+search_text: |
+  CloudTrail logging disabled audit trail monitoring AWS API calls
+  AWS CloudTrail not enabled audit logging compliance security monitoring
+
+tags:
+  - cloudtrail
+  - logging
+  - audit
+  - monitoring
+
+compliance_frameworks:
+  - "CIS AWS 3.1"
+  - "SOC 2 CC7.2"
+  - "PCI DSS 10.1"
+
+required_permissions:
+  - cloudtrail:DescribeTrails
+  - cloudtrail:GetTrailStatus
+  - cloudtrail:CreateTrail
+  - cloudtrail:StartLogging
+  - s3:CreateBucket
+  - s3:PutBucketPolicy
+
+estimated_execution_time_seconds: 60
+
+pre_check_code: |
+  import boto3
+  
+  def pre_check(region: str = None, **kwargs) -> dict:
+      """Check if CloudTrail is enabled in the region."""
+      cloudtrail = boto3.client('cloudtrail', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      trails = cloudtrail.describe_trails(includeShadowTrails=False)
+      active_trails = []
+      
+      for trail in trails.get('trailList', []):
+          status = cloudtrail.get_trail_status(Name=trail['TrailARN'])
+          if status.get('IsLogging'):
+              active_trails.append({
+                  "name": trail['Name'],
+                  "s3_bucket": trail.get('S3BucketName'),
+                  "is_multi_region": trail.get('IsMultiRegionTrail')
+              })
+      
+      return {
+          "needs_remediation": len(active_trails) == 0,
+          "active_trail_count": len(active_trails),
+          "trails": active_trails
+      }
+
+remediation_code: |
+  import boto3
+  import json
+  
+  def remediate(trail_name: str = "patchweave-cloudtrail", s3_bucket: str = None, **kwargs) -> dict:
+      """Create and enable a CloudTrail trail."""
+      cloudtrail = boto3.client('cloudtrail', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      s3 = boto3.client('s3', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      sts = boto3.client('sts', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      account_id = sts.get_caller_identity()['Account']
+      
+      # Create S3 bucket for logs if not provided
+      if not s3_bucket:
+          s3_bucket = f'cloudtrail-logs-{account_id}'
+          try:
+              s3.create_bucket(Bucket=s3_bucket)
+          except s3.exceptions.BucketAlreadyOwnedByYou:
+              pass
+          
+          # Set bucket policy for CloudTrail
+          bucket_policy = {
+              "Version": "2012-10-17",
+              "Statement": [{
+                  "Sid": "CloudTrailAclCheck",
+                  "Effect": "Allow",
+                  "Principal": {"Service": "cloudtrail.amazonaws.com"},
+                  "Action": "s3:GetBucketAcl",
+                  "Resource": f"arn:aws:s3:::{s3_bucket}"
+              }, {
+                  "Sid": "CloudTrailWrite",
+                  "Effect": "Allow",
+                  "Principal": {"Service": "cloudtrail.amazonaws.com"},
+                  "Action": "s3:PutObject",
+                  "Resource": f"arn:aws:s3:::{s3_bucket}/AWSLogs/{account_id}/*"
+              }]
+          }
+          s3.put_bucket_policy(Bucket=s3_bucket, Policy=json.dumps(bucket_policy))
+      
+      # Create the trail
+      trail = cloudtrail.create_trail(
+          Name=trail_name,
+          S3BucketName=s3_bucket,
+          IsMultiRegionTrail=True,
+          EnableLogFileValidation=True
+      )
+      
+      # Start logging
+      cloudtrail.start_logging(Name=trail_name)
+      
+      return {
+          "success": True,
+          "action": "cloudtrail_enabled",
+          "trail_name": trail_name,
+          "s3_bucket": s3_bucket,
+          "multi_region": True
+      }
+
+post_check_code: |
+  import boto3
+  
+  def post_check(trail_name: str = "patchweave-cloudtrail", **kwargs) -> dict:
+      """Verify CloudTrail is now logging."""
+      cloudtrail = boto3.client('cloudtrail', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      try:
+          status = cloudtrail.get_trail_status(Name=trail_name)
+          
+          return {
+              "verified": status.get('IsLogging', False),
+              "is_logging": status.get('IsLogging'),
+              "latest_delivery_time": str(status.get('LatestDeliveryTime', 'N/A'))
+          }
+      except Exception as e:
+          return {"verified": False, "error": str(e)}

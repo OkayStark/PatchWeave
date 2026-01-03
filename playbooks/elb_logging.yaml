@@ -1,0 +1,133 @@
+id: "playbook-elb-logging"
+name: "ELB Access Logging Enablement"
+description: "Enable access logging for Elastic Load Balancers for audit and monitoring"
+vulnerability_type: elb_logging
+cloud_provider: AWS
+resource_type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+severity: Medium
+version: "1.0.0"
+
+search_text: |
+  ELB load balancer access logging disabled ALB NLB audit trail
+  AWS elastic load balancer logging not enabled monitoring compliance
+
+tags:
+  - elb
+  - alb
+  - logging
+  - monitoring
+
+compliance_frameworks:
+  - "CIS AWS 2.4"
+  - "SOC 2 CC7.2"
+  - "PCI DSS 10.2"
+
+required_permissions:
+  - elasticloadbalancing:DescribeLoadBalancers
+  - elasticloadbalancing:DescribeLoadBalancerAttributes
+  - elasticloadbalancing:ModifyLoadBalancerAttributes
+  - s3:CreateBucket
+  - s3:PutBucketPolicy
+
+estimated_execution_time_seconds: 30
+
+pre_check_code: |
+  import boto3
+  
+  def pre_check(load_balancer_arn: str, **kwargs) -> dict:
+      """Check if ELB has access logging enabled."""
+      elbv2 = boto3.client('elbv2', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      try:
+          response = elbv2.describe_load_balancer_attributes(
+              LoadBalancerArn=load_balancer_arn
+          )
+          
+          attributes = {attr['Key']: attr['Value'] for attr in response['Attributes']}
+          logging_enabled = attributes.get('access_logs.s3.enabled', 'false') == 'true'
+          
+          return {
+              "needs_remediation": not logging_enabled,
+              "logging_enabled": logging_enabled,
+              "s3_bucket": attributes.get('access_logs.s3.bucket', ''),
+              "s3_prefix": attributes.get('access_logs.s3.prefix', '')
+          }
+      except Exception as e:
+          return {"needs_remediation": False, "error": str(e)}
+
+remediation_code: |
+  import boto3
+  import json
+  
+  def remediate(load_balancer_arn: str, s3_bucket: str = None, s3_prefix: str = "elb-logs", **kwargs) -> dict:
+      """Enable access logging for the load balancer."""
+      elbv2 = boto3.client('elbv2', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      s3 = boto3.client('s3', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      sts = boto3.client('sts', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      account_id = sts.get_caller_identity()['Account']
+      region = 'us-east-1'  # Default region
+      
+      # Create S3 bucket if not provided
+      if not s3_bucket:
+          s3_bucket = f'elb-logs-{account_id}'
+          try:
+              s3.create_bucket(Bucket=s3_bucket)
+          except s3.exceptions.BucketAlreadyOwnedByYou:
+              pass
+          
+          # ELB service account IDs vary by region
+          elb_account_ids = {
+              'us-east-1': '127311923021',
+              'us-west-2': '797873946194',
+              'eu-west-1': '156460612806'
+          }
+          elb_account = elb_account_ids.get(region, '127311923021')
+          
+          bucket_policy = {
+              "Version": "2012-10-17",
+              "Statement": [{
+                  "Effect": "Allow",
+                  "Principal": {"AWS": f"arn:aws:iam::{elb_account}:root"},
+                  "Action": "s3:PutObject",
+                  "Resource": f"arn:aws:s3:::{s3_bucket}/{s3_prefix}/*"
+              }]
+          }
+          s3.put_bucket_policy(Bucket=s3_bucket, Policy=json.dumps(bucket_policy))
+      
+      # Enable logging
+      elbv2.modify_load_balancer_attributes(
+          LoadBalancerArn=load_balancer_arn,
+          Attributes=[
+              {'Key': 'access_logs.s3.enabled', 'Value': 'true'},
+              {'Key': 'access_logs.s3.bucket', 'Value': s3_bucket},
+              {'Key': 'access_logs.s3.prefix', 'Value': s3_prefix}
+          ]
+      )
+      
+      return {
+          "success": True,
+          "action": "logging_enabled",
+          "s3_bucket": s3_bucket,
+          "s3_prefix": s3_prefix
+      }
+
+post_check_code: |
+  import boto3
+  
+  def post_check(load_balancer_arn: str, **kwargs) -> dict:
+      """Verify access logging is now enabled."""
+      elbv2 = boto3.client('elbv2', endpoint_url='{{AWS_ENDPOINT_URL}}')
+      
+      response = elbv2.describe_load_balancer_attributes(
+          LoadBalancerArn=load_balancer_arn
+      )
+      
+      attributes = {attr['Key']: attr['Value'] for attr in response['Attributes']}
+      logging_enabled = attributes.get('access_logs.s3.enabled', 'false') == 'true'
+      
+      return {
+          "verified": logging_enabled,
+          "logging_enabled": logging_enabled,
+          "s3_bucket": attributes.get('access_logs.s3.bucket', '')
+      }
