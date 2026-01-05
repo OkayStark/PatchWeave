@@ -151,6 +151,22 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8080, description="API port to bind to")
 
     # -------------------------------------------------------------------------
+    # Deployment Configuration
+    # -------------------------------------------------------------------------
+    aws_region: str = Field(
+        default="us-east-1",
+        description="Default AWS region for deployment",
+    )
+    deployment_dry_run: bool = Field(
+        default=True,
+        description="If True, simulate deployments without making changes",
+    )
+    terraform_templates_directory: str = Field(
+        default="./terraform",
+        description="Directory containing Terraform templates",
+    )
+
+    # -------------------------------------------------------------------------
     # Validators
     # -------------------------------------------------------------------------
     @field_validator("log_level")
