@@ -55,6 +55,10 @@ class Settings(BaseSettings):
         default=60,
         description="Polling interval for Jira in seconds",
     )
+    approval_poll_interval_seconds: int = Field(
+        default=30,
+        description="Polling interval for approval status in seconds",
+    )
 
     # -------------------------------------------------------------------------
     # AWS Test Environment
