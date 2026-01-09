@@ -1,242 +1,264 @@
 # PatchWeave
 
 <p align="center">
-  <b>Intelligent Cloud Security Remediation System</b>
+  <b>🔐 Intelligent Cloud Security Remediation System</b>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT">
-  <img src="https://img.shields.io/badge/version-1.0.0-brightgreen.svg" alt="Version">
+  <img src="https://img.shields.io/badge/LangGraph-0.1.x-green.svg" alt="LangGraph">
+  <img src="https://img.shields.io/badge/FastAPI-0.100+-teal.svg" alt="FastAPI">
+  <img src="https://img.shields.io/badge/tests-268%20passing-brightgreen.svg" alt="Tests">
 </p>
 
 ---
 
-## Overview
+PatchWeave is a production-grade security remediation system that automatically analyzes cloud security findings, matches them to remediation playbooks, and deploys fixes with human approval.
 
-PatchWeave is a multi-agent system that automates cloud security remediation while maintaining human oversight for production changes. It bridges the gap between vulnerability detection (CSPM tools like Wiz, Prisma Cloud) and actual remediation.
+## 🎯 Key Features
 
-### Key Features
+- **Automated Analysis**: LLM-powered analysis of security findings from Jira
+- **Semantic Matching**: ChromaDB-based playbook matching with three-tier confidence scoring
+- **Safe Deployment**: Validation against LocalStack before production deployment
+- **Human-in-the-Loop**: Approval workflow with detailed Jira comments
+- **Learning Loop**: System learns from successful remediations
 
-- 🔍 **Automated Ingestion**: Consumes security findings from Jira tickets
-- 🧠 **Intelligent Analysis**: LLM-powered classification of vulnerabilities
-- 📚 **Knowledge Base**: Semantic playbook matching using ChromaDB
-- ✅ **Safe Validation**: Tests fixes in isolated environments before production
-- 👥 **Human-in-the-Loop**: Requires approval before any production changes
-- 📊 **Complete Audit Trail**: Structured logging of all decisions
+## 🏗️ Architecture
 
-### The Problem
+\`\`\`
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              PatchWeave System                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌────────┐  │
+│  │  Jira   │───▶│ Analyzer │───▶│ Matcher  │───▶│Validator │───▶│Deployer│  │
+│  │ Polling │    │  Agent   │    │  Agent   │    │  Agent   │    │ Agent  │  │
+│  └─────────┘    └──────────┘    └──────────┘    └──────────┘    └────────┘  │
+│       │              │                │               │              │       │
+│       │         Tokenizer         ChromaDB       LocalStack       Boto3      │
+│       │              │                │               │              │       │
+│       ▼              ▼                ▼               ▼              ▼       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                         LangGraph Workflow                               │ │
+│  │  INGESTION → ANALYSIS → MATCHING → VALIDATION → APPROVAL → DEPLOYMENT   │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+\`\`\`
 
-Organizations face **10,000+ security findings** that take **7-9 hours each** to remediate manually. PatchWeave reduces this to **25-30 minutes** while maintaining safety.
-
-## Quick Start
+## 📦 Quick Start
 
 ### Prerequisites
 
 - Python 3.11+
 - Docker and Docker Compose
-- AWS credentials (or LocalStack for development)
-- Jira API token
+- AWS credentials (for production) or LocalStack (for development)
+- Jira API access
+- OpenAI API key
 
 ### Installation
 
-```bash
+\`\`\`bash
 # Clone the repository
-git clone https://github.com/your-org/patchweave.git
+git clone https://github.com/yourorg/patchweave.git
 cd patchweave
 
 # Create virtual environment
 python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# or: .venv\Scripts\activate  # Windows
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install dependencies
-make dev-install
+pip install -e ".[dev]"
 
 # Copy environment template
 cp .env.example .env
 # Edit .env with your configuration
 
-# Start infrastructure
-make docker-up
-
-# Verify services are healthy
-make docker-health
+# Start infrastructure services
+docker-compose up -d
 
 # Run the application
-make run
-```
+python -m patchweave
+\`\`\`
 
-### Configuration
+## ⚙️ Configuration
 
-Edit `.env` with your settings:
+Create a \`.env\` file:
 
-```bash
-# Jira
-JIRA_BASE_URL=https://your-org.atlassian.net
-JIRA_EMAIL=patchweave@your-org.com
-JIRA_API_TOKEN=your-token
+\`\`\`bash
+# Core Settings
+PATCHWEAVE_ENV=development
+PATCHWEAVE_DRY_RUN=true
+
+# Jira Integration
+JIRA_BASE_URL=https://yourorg.atlassian.net
+JIRA_EMAIL=patchweave@yourorg.com
+JIRA_API_TOKEN=your-api-token
 JIRA_PROJECT_KEY=SEC
 
-# AWS (use 'test' for LocalStack)
-AWS_TEST_ACCESS_KEY_ID=test
-AWS_TEST_SECRET_ACCESS_KEY=test
-
-# LLM
+# LLM Configuration
 OPENAI_API_KEY=your-openai-key
-```
+OPENAI_MODEL=gpt-4
 
-## Architecture
+# ChromaDB
+CHROMADB_HOST=localhost
+CHROMADB_PORT=8001
 
-```
-┌─────────────┐     ┌───────────┐     ┌────────────────┐
-│   Jira      │────▶│ Tokenizer │────▶│    Analyzer    │
-│  (CSPM)     │     │           │     │    Agent       │
-└─────────────┘     └───────────┘     └───────┬────────┘
-                                              │
-                                              ▼
-┌─────────────┐     ┌───────────┐     ┌────────────────┐
-│  Deployment │◀────│ Validation│◀────│   ChromaDB     │
-│    Agent    │     │ Workflow  │     │   Matching     │
-└─────────────┘     └───────────┘     └────────────────┘
-```
+# LocalStack (for validation)
+LOCALSTACK_ENDPOINT=http://localhost:4566
+USE_LOCALSTACK=true
 
-### Components
+# Matching Thresholds
+MATCH_THRESHOLD_HIGH=0.90
+MATCH_THRESHOLD_MODERATE=0.70
+\`\`\`
 
-| Component | Purpose |
-|-----------|---------|
-| **Tokenizer** | Sanitizes sensitive data before LLM processing |
-| **Analyzer Agent** | Classifies vulnerabilities using fixed taxonomy |
-| **ChromaDB** | Semantic search for playbook matching |
-| **Validation Workflow** | Tests fixes in isolated environments |
-| **Deployment Agent** | Applies approved fixes to production |
+## 🎮 Usage
 
-### Jira Workflow States
+### Running PatchWeave
 
-```
-OPEN → ANALYZING → PLAYBOOK SEARCH → VALIDATING → PENDING APPROVAL → DEPLOYING → RESOLVED
-                         ↓                 ↓              ↓              ↓
-                   NO PLAYBOOK    VALIDATION FAILED    REJECTED    DEPLOYMENT FAILED
-```
+\`\`\`bash
+# Full system mode (Jira polling + API)
+python -m patchweave
 
-## Playbooks
+# API-only mode
+python -m patchweave --mode api-only
 
-Playbooks are YAML files containing remediation code:
+# With custom host/port
+python -m patchweave --host 0.0.0.0 --port 8080
+\`\`\`
 
-```yaml
-playbook:
-  id: "550e8400-e29b-41d4-a716-446655440001"
-  name: "S3 Block Public Access"
-  vulnerability_type: "s3_public_access"
-  
-  remediation_code: |
-    import boto3
-    s3 = boto3.client('s3')
-    s3.put_public_access_block(
-        Bucket='{{BUCKET_NAME}}',
-        PublicAccessBlockConfiguration={
-            'BlockPublicAcls': True,
-            'IgnorePublicAcls': True,
-            'BlockPublicPolicy': True,
-            'RestrictPublicBuckets': True
-        }
-    )
-```
+### API Endpoints
 
-See [playbooks/](playbooks/) for all available playbooks.
-
-## API
-
-PatchWeave exposes a REST API:
+Access the interactive API documentation at \`http://localhost:8000/docs\`
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/queue` | GET | Queue status |
-| `/findings/{id}` | GET | Finding details |
-| `/playbooks` | GET | List playbooks |
-| `/stats` | GET | System statistics |
+| \`/health\` | GET | Health check |
+| \`/api/v1/findings\` | GET | List all findings |
+| \`/api/v1/findings/submit\` | POST | Submit a new finding |
+| \`/api/v1/findings/{id}\` | GET | Get finding details |
+| \`/api/v1/stats\` | GET | Get system statistics |
+| \`/api/v1/stats/detailed\` | GET | Get detailed breakdown |
+| \`/api/v1/stats/learning\` | GET | Get learning statistics |
 
-Access Swagger documentation at `http://localhost:8080/docs`
+### Example: Submit a Finding
 
-## Development
+\`\`\`bash
+curl -X POST http://localhost:8000/api/v1/findings/submit \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "jira_ticket_id": "SEC-1234",
+    "jira_ticket_url": "https://org.atlassian.net/browse/SEC-1234",
+    "title": "S3 bucket has public access enabled",
+    "description": "The S3 bucket prod-logs has Block Public Access disabled.",
+    "severity": "Critical"
+  }'
+\`\`\`
 
-### Running Tests
+## 🔍 Supported Vulnerability Types
 
-```bash
+| Type | Description | Severity |
+|------|-------------|----------|
+| \`s3_public_access\` | S3 bucket with public access | Critical |
+| \`s3_encryption_disabled\` | S3 bucket without encryption | High |
+| \`security_group_open_port\` | SG with unrestricted access | High |
+| \`rds_public_access\` | RDS instance publicly accessible | Critical |
+| \`rds_encryption_disabled\` | RDS without encryption | High |
+| \`ec2_imdsv1\` | EC2 using IMDSv1 | Medium |
+| \`iam_user_no_mfa\` | IAM user without MFA | High |
+| \`kms_key_rotation\` | KMS key rotation disabled | Medium |
+| \`ebs_encryption\` | EBS volume unencrypted | High |
+| \`cloudtrail_disabled\` | CloudTrail logging disabled | High |
+| \`guardduty_disabled\` | GuardDuty not enabled | Medium |
+| \`vpc_flow_logs\` | VPC flow logs disabled | Medium |
+
+## 🧪 Testing
+
+\`\`\`bash
 # Run all tests
-make test
+pytest
 
 # Run with coverage
-make test-cov
+pytest --cov=patchweave --cov-report=html
 
-# Run specific test types
-make test-unit
-make test-integration
-```
+# Run validation scripts
+python scripts/validate_phase1.py
+python scripts/validate_phase2.py
+python scripts/validate_phase3.py
+python scripts/validate_phase4.py
+python scripts/validate_phase5.py
+\`\`\`
 
-### Code Quality
+## 📁 Project Structure
 
-```bash
-# Format code
-make format
-
-# Run linting
-make lint
-```
-
-### Docker Commands
-
-```bash
-# Start services
-make docker-up
-
-# Stop services
-make docker-down
-
-# View logs
-make docker-logs
-
-# Clean everything
-make docker-clean
-```
-
-## Project Structure
-
-```
+\`\`\`
 patchweave/
 ├── src/patchweave/
-│   ├── agents/          # LangGraph agents
-│   ├── api/             # FastAPI application
-│   ├── core/            # Business logic
-│   ├── integrations/    # External services
-│   ├── models/          # Pydantic schemas
-│   └── logging/         # Structured logging
-├── playbooks/           # Remediation playbooks
-├── tests/               # Test suite
-└── docs/                # Documentation
-```
+│   ├── agents/           # LangGraph agents
+│   │   ├── analyzer.py   # Analyzer Agent
+│   │   ├── coordinator.py # Coordinator Agent
+│   │   ├── deployer.py   # Deployer Agent
+│   │   ├── validator.py  # Validator Agent
+│   │   ├── state.py      # Workflow state model
+│   │   └── workflow.py   # LangGraph workflow
+│   ├── api/              # FastAPI endpoints
+│   ├── approval/         # Approval handler
+│   ├── core/             # Core utilities
+│   ├── integrations/     # External integrations
+│   │   └── jira.py       # Jira client
+│   ├── knowledge/        # Knowledge base
+│   │   ├── chromadb_client.py
+│   │   └── loader.py     # Playbook loader
+│   ├── learning/         # Learning loop
+│   ├── models/           # Pydantic models
+│   ├── config.py         # Configuration
+│   ├── logging.py        # Structured logging
+│   └── main.py           # Application entry
+├── playbooks/            # Remediation playbooks
+├── tests/                # Test suite
+├── docs/                 # Documentation
+└── scripts/              # Utility scripts
+\`\`\`
 
-## Security
+## 📚 Documentation
 
-- **Tokenization**: Sensitive data never reaches LLMs
-- **Validation First**: All fixes tested before production
-- **Human Approval**: Required for any production changes
-- **Audit Trail**: Complete logging of all actions
-- **Credential Isolation**: Separate test/production credentials
+- [Demo Scenario](docs/DEMO_SCENARIO.md) - Demo walkthrough
+- [Playbook Authoring](docs/PLAYBOOK_AUTHORING.md) - How to write playbooks
+- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
+- [API Reference](http://localhost:8000/docs) - Interactive API docs
 
-## Contributing
+## 🔒 Security Considerations
+
+1. **Tokenization**: Sensitive data is tokenized before LLM processing
+2. **Approval Workflow**: Human approval required before deployment
+3. **Dry-Run Mode**: Test without actual deployment
+4. **Audit Logging**: All actions are logged
+5. **Least Privilege**: Use minimal IAM permissions
+
+## 📊 Workflow Phases
+
+1. **INGESTION**: Receive finding from Jira
+2. **ANALYSIS**: LLM classifies vulnerability type
+3. **MATCHING**: ChromaDB finds best playbook
+4. **VERIFICATION**: (Optional) Review moderate matches
+5. **VALIDATION**: Test against LocalStack
+6. **APPROVAL**: Request human approval via Jira
+7. **DEPLOYMENT**: Execute remediation
+8. **COMPLETE**: Record success in learning loop
+
+## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Run tests and linting
+4. Run tests: \`pytest\`
 5. Submit a pull request
 
-## License
+## 📄 License
 
-MIT License - see [LICENSE](LICENSE) for details.
+This project is part of an academic capstone project.
 
-## Acknowledgments
+---
 
-This project was developed as a capstone project demonstrating cloud security automation with human-in-the-loop oversight.
+Built with ❤️ using [LangGraph](https://github.com/langchain-ai/langgraph), [FastAPI](https://fastapi.tiangolo.com/), and [ChromaDB](https://www.trychroma.com/)
