@@ -40,7 +40,8 @@ class TestAnalyzerAgent:
     def test_init_default_settings(self):
         """Test initializing with default settings."""
         agent = AnalyzerAgent()
-        assert agent.model == "gpt-4-turbo-preview"
+        # Default is now gemini-1.5-flash for free tier
+        assert agent.model == "gemini-1.5-flash"
         assert agent.temperature == 0.0
 
     def test_init_custom_settings(self):

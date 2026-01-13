@@ -111,13 +111,21 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     # LLM Configuration
     # -------------------------------------------------------------------------
+    llm_provider: str = Field(
+        default="gemini",
+        description="LLM provider to use: 'gemini' or 'openai'",
+    )
+    google_api_key: Optional[str] = Field(
+        default=None,
+        description="Google API key for Gemini",
+    )
     openai_api_key: Optional[str] = Field(
         default=None,
-        description="OpenAI API key",
+        description="OpenAI API key (optional, for OpenAI provider)",
     )
     llm_model: str = Field(
-        default="gpt-4-turbo-preview",
-        description="LLM model to use",
+        default="gemini-1.5-flash",
+        description="LLM model to use (gemini-1.5-flash for free tier, or gpt-4-turbo-preview for OpenAI)",
     )
     llm_temperature: float = Field(
         default=0.0,

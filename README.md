@@ -96,15 +96,20 @@ JIRA_EMAIL=patchweave@yourorg.com
 JIRA_API_TOKEN=your-api-token
 JIRA_PROJECT_KEY=SEC
 
-# LLM Configuration
-OPENAI_API_KEY=your-openai-key
-OPENAI_MODEL=gpt-4
+# LLM Configuration (Gemini Free Tier - Recommended)
+LLM_PROVIDER=gemini
+GOOGLE_API_KEY=your-google-api-key  # Get at https://aistudio.google.com/apikey
+LLM_MODEL=gemini-1.5-flash
 
-# ChromaDB
+# Alternative: OpenAI (set LLM_PROVIDER=openai)
+# OPENAI_API_KEY=your-openai-key
+# LLM_MODEL=gpt-4-turbo-preview
+
+# ChromaDB (local embedded mode - free)
 CHROMADB_HOST=localhost
 CHROMADB_PORT=8001
 
-# LocalStack (for validation)
+# LocalStack (for validation - free)
 LOCALSTACK_ENDPOINT=http://localhost:4566
 USE_LOCALSTACK=true
 

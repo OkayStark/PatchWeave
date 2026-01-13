@@ -13,7 +13,6 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from patchweave.config import settings
@@ -118,7 +117,7 @@ class AnalyzerAgent:
         self.model = model or settings.llm_model
         self.temperature = temperature if temperature is not None else settings.llm_temperature
         
-        self._llm: ChatOpenAI | None = None
+        self._llm = None  # Will be created lazily based on provider
         self._parser = JsonOutputParser(pydantic_object=AnalysisOutput)
         self._tokenizer = get_tokenizer()
         self._token_store = get_token_store()
@@ -127,22 +126,46 @@ class AnalyzerAgent:
             "analyzer_agent_initialized",
             model=self.model,
             temperature=self.temperature,
+            provider=settings.llm_provider,
         )
 
-    @property
-    def llm(self) -> ChatOpenAI:
-        """Get or create the LLM instance."""
-        if self._llm is None:
+    def _create_llm(self):
+        """Create the appropriate LLM based on configuration."""
+        provider = settings.llm_provider.lower()
+        
+        if provider == "gemini":
+            if not settings.google_api_key:
+                raise ValueError(
+                    "GOOGLE_API_KEY not configured. "
+                    "Set it in .env or environment variables."
+                )
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            return ChatGoogleGenerativeAI(
+                model=self.model,
+                temperature=self.temperature,
+                google_api_key=settings.google_api_key,
+            )
+        elif provider == "openai":
             if not settings.openai_api_key:
                 raise ValueError(
                     "OPENAI_API_KEY not configured. "
                     "Set it in .env or environment variables."
                 )
-            self._llm = ChatOpenAI(
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(
                 model=self.model,
                 temperature=self.temperature,
                 api_key=settings.openai_api_key,
             )
+        else:
+            raise ValueError(f"Unknown LLM provider: {provider}. Use 'gemini' or 'openai'.")
+
+    @property
+    def llm(self):
+        """Get or create the LLM instance."""
+        if self._llm is None:
+            self._llm = self._create_llm()
+        return self._llm
         return self._llm
 
     def _parse_vulnerability_type(self, type_str: str) -> VulnerabilityType:

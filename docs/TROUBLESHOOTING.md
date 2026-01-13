@@ -128,7 +128,7 @@ python -m patchweave --port 8001
 
 **Symptom:**
 ```
-ValidationError: OPENAI_API_KEY field required
+ValidationError: GOOGLE_API_KEY or OPENAI_API_KEY field required
 ```
 
 **Solution:**
@@ -139,8 +139,16 @@ cp .env.example .env
 # Edit and fill in required values
 nano .env
 
-# Required fields:
+# Required fields for Gemini (free tier - recommended):
+# - LLM_PROVIDER=gemini
+# - GOOGLE_API_KEY (get at https://aistudio.google.com/apikey)
+# - LLM_MODEL=gemini-1.5-flash
+
+# Alternative: OpenAI
+# - LLM_PROVIDER=openai
 # - OPENAI_API_KEY
+
+# Also required:
 # - JIRA_BASE_URL
 # - JIRA_EMAIL
 # - JIRA_API_TOKEN

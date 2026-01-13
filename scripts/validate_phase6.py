@@ -202,7 +202,8 @@ def check_env_example():
     required_vars = [
         "JIRA_BASE_URL",
         "JIRA_API_TOKEN",
-        "OPENAI_API_KEY",
+        "GOOGLE_API_KEY",  # For Gemini free tier (primary)
+        "LLM_PROVIDER",
         "CHROMA",  # CHROMA_HOST, CHROMA_PORT
         "LOCALSTACK",
         "AWS",
