@@ -44,10 +44,16 @@ async def health_check() -> HealthResponse:
     try:
         import httpx
         async with httpx.AsyncClient() as client:
+            # Try v2 API first (newer ChromaDB), fall back to v1
             response = await client.get(
-                f"{settings.get_chroma_url()}/api/v1/heartbeat",
+                f"{settings.get_chroma_url()}/api/v2/heartbeat",
                 timeout=5.0
             )
+            if response.status_code == 410:  # v2 not available, try v1
+                response = await client.get(
+                    f"{settings.get_chroma_url()}/api/v1/heartbeat",
+                    timeout=5.0
+                )
             if response.status_code == 200:
                 components["chromadb"] = ComponentHealth(status="healthy")
             else:

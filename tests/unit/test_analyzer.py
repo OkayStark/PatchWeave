@@ -39,10 +39,11 @@ class TestAnalyzerAgent:
 
     def test_init_default_settings(self):
         """Test initializing with default settings."""
+        from patchweave.config import settings
         agent = AnalyzerAgent()
-        # Default is now gemini-1.5-flash for free tier
-        assert agent.model == "gemini-1.5-flash"
-        assert agent.temperature == 0.0
+        # Uses model from settings (may be from .env or defaults)
+        assert agent.model == settings.llm_model
+        assert agent.temperature == settings.llm_temperature
 
     def test_init_custom_settings(self):
         """Test initializing with custom settings."""

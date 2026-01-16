@@ -20,10 +20,12 @@ class TestJiraClient:
 
     def test_init_defaults(self):
         """Test initialization with default settings."""
+        from patchweave.config import settings
         client = JiraClient()
         
-        assert client.base_url == "https://example.atlassian.net"
-        assert client.project_key == "SEC"
+        # Uses values from settings (may be from .env or defaults)
+        assert client.base_url == settings.jira_base_url
+        assert client.project_key == settings.jira_project_key
         assert not client._connected
 
     def test_init_custom(self):
