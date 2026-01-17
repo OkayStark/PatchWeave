@@ -129,21 +129,42 @@ class AnalyzerAgent:
             provider=settings.llm_provider,
         )
 
+    # Class-level key rotation state
+    _current_key_index = 0
+    _key_rotation_lock = None
+    
+    @classmethod
+    def _get_next_gemini_key(cls) -> str:
+        """Get the next Gemini API key using round-robin rotation."""
+        keys = [k for k in [settings.google_api_key, settings.google_api_key_2,settings.google_api_key_3] if k]
+        if not keys:
+            raise ValueError(
+                "GOOGLE_API_KEY not configured. "
+                "Set it in .env or environment variables."
+            )
+        
+        # Simple round-robin rotation
+        key = keys[cls._current_key_index % len(keys)]
+        cls._current_key_index += 1
+        
+        log.debug(
+            "gemini_key_rotation",
+            key_index=(cls._current_key_index - 1) % len(keys) + 1,
+            total_keys=len(keys),
+        )
+        return key
+    
     def _create_llm(self):
         """Create the appropriate LLM based on configuration."""
         provider = settings.llm_provider.lower()
         
         if provider == "gemini":
-            if not settings.google_api_key:
-                raise ValueError(
-                    "GOOGLE_API_KEY not configured. "
-                    "Set it in .env or environment variables."
-                )
+            api_key = self._get_next_gemini_key()
             from langchain_google_genai import ChatGoogleGenerativeAI
             return ChatGoogleGenerativeAI(
                 model=self.model,
                 temperature=self.temperature,
-                google_api_key=settings.google_api_key,
+                google_api_key=api_key,
             )
         elif provider == "openai":
             if not settings.openai_api_key:
@@ -166,7 +187,52 @@ class AnalyzerAgent:
         if self._llm is None:
             self._llm = self._create_llm()
         return self._llm
+
+    def _rotate_llm(self):
+        """Force creation of new LLM with rotated API key."""
+        self._llm = self._create_llm()
         return self._llm
+
+    async def _invoke_with_retry(self, messages, finding_id: str, max_retries: int = 3):
+        """
+        Invoke LLM with automatic retry and key rotation on rate limit errors.
+        
+        Args:
+            messages: Messages to send to the LLM
+            finding_id: Finding ID for logging
+            max_retries: Maximum number of retries
+            
+        Returns:
+            LLM response
+        """
+        import asyncio
+        
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                return await self.llm.ainvoke(messages)
+            except Exception as e:
+                error_str = str(e).lower()
+                # Check for rate limit errors (various providers use different messages)
+                if any(keyword in error_str for keyword in ['rate limit', 'quota', '429', 'resource exhausted', 'too many requests']):
+                    log.warning(
+                        "rate_limit_hit_rotating_key",
+                        finding_id=finding_id,
+                        attempt=attempt + 1,
+                        max_retries=max_retries,
+                        error=str(e),
+                    )
+                    # Rotate to next key and retry
+                    self._rotate_llm()
+                    # Small delay before retry
+                    await asyncio.sleep(1)
+                    last_error = e
+                else:
+                    # Non-rate-limit error, re-raise immediately
+                    raise
+        
+        # All retries exhausted
+        raise last_error or Exception("All API key retries exhausted")
 
     def _parse_vulnerability_type(self, type_str: str) -> VulnerabilityType:
         """Parse vulnerability type string to enum."""
@@ -308,7 +374,7 @@ Provide your analysis as JSON."""
         ]
 
         try:
-            response = await self.llm.ainvoke(messages)
+            response = await self._invoke_with_retry(messages, finding_id)
             
             # Parse the JSON response
             content = response.content

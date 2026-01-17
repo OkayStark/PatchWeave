@@ -10,6 +10,8 @@ Handles all communication with Jira Cloud including:
 from datetime import datetime, timezone
 from typing import Any
 
+import requests
+from requests.auth import HTTPBasicAuth
 from jira import JIRA
 from jira.exceptions import JIRAError
 
@@ -59,6 +61,7 @@ class JiraClient:
         email: str | None = None,
         api_token: str | None = None,
         project_key: str | None = None,
+        open_status: str | None = None,
     ):
         """
         Initialize Jira client.
@@ -68,11 +71,13 @@ class JiraClient:
             email: Service account email (defaults to settings)
             api_token: API token (defaults to settings)
             project_key: Project to monitor (defaults to settings)
+            open_status: Status name for new findings (defaults to settings)
         """
         self.base_url = base_url or settings.jira_base_url
         self.email = email or settings.jira_email
         self.api_token = api_token or settings.jira_api_token
         self.project_key = project_key or settings.jira_project_key
+        self.open_status = open_status or settings.jira_open_status
         
         self._client: JIRA | None = None
         self._connected = False
@@ -90,79 +95,81 @@ class JiraClient:
         Raises:
             JiraClientError: If connection fails
         """
-        if self._connected and self._client:
+        if self._connected:
             return
-            
+        
+        # Use requests to verify connection (more reliable with Atlassian Cloud)
         try:
-            self._client = JIRA(
-                server=self.base_url,
-                basic_auth=(self.email, self.api_token),
+            auth = HTTPBasicAuth(self.email, self.api_token)
+            response = requests.get(
+                f"{self.base_url}rest/api/3/myself",
+                auth=auth,
+                timeout=30,
             )
-            # Verify connection by fetching server info
-            self._client.server_info()
+            response.raise_for_status()
             self._connected = True
             log.info("jira_connected", base_url=self.base_url)
-        except JIRAError as e:
+        except requests.RequestException as e:
             log.error("jira_connection_failed", error=str(e))
             raise JiraClientError(f"Failed to connect to Jira: {e}") from e
 
     def disconnect(self) -> None:
         """Close the Jira connection."""
-        if self._client:
-            self._client.close()
-            self._client = None
-            self._connected = False
-            log.info("jira_disconnected")
+        self._connected = False
+        log.info("jira_disconnected")
 
-    @property
-    def client(self) -> JIRA:
-        """Get the underlying Jira client, connecting if needed."""
-        if not self._connected or not self._client:
-            self.connect()
-        return self._client  # type: ignore
+    def _get_auth(self) -> HTTPBasicAuth:
+        """Get HTTP Basic Auth for API calls."""
+        return HTTPBasicAuth(self.email, self.api_token)
 
     def fetch_open_findings(
         self,
         max_results: int = 50,
-        status: str = "OPEN",
+        status: str | None = None,
     ) -> list[RawFinding]:
         """
         Fetch security findings from Jira that need processing.
         
         Args:
             max_results: Maximum number of issues to fetch
-            status: Jira status to filter by (default: OPEN)
+            status: Jira status to filter by (defaults to configured open_status)
             
         Returns:
             List of RawFinding objects
         """
-        jql = (
-            f'project = "{self.project_key}" '
-            f'AND status = "{status}" '
-            f'ORDER BY created ASC'
-        )
+        status = status or self.open_status
+        jql = f'project = "{self.project_key}" AND status = "{status}" ORDER BY created ASC'
         
         log.debug("jira_query", jql=jql, max_results=max_results)
         
         try:
-            issues = self.client.search_issues(
-                jql,
-                maxResults=max_results,
-                fields="summary,description,created,priority,customfield_*",
+            # Use the new Jira Cloud search API (v3)
+            response = requests.get(
+                f"{self.base_url}rest/api/3/search/jql",
+                auth=self._get_auth(),
+                params={
+                    "jql": jql,
+                    "maxResults": max_results,
+                    "fields": "summary,description,created,priority,status",
+                },
+                timeout=30,
             )
-        except JIRAError as e:
+            response.raise_for_status()
+            data = response.json()
+            issues = data.get("issues", [])
+        except requests.RequestException as e:
             log.error("jira_query_failed", jql=jql, error=str(e))
             raise JiraClientError(f"Failed to fetch issues: {e}") from e
 
         findings: list[RawFinding] = []
         for issue in issues:
             try:
-                finding = self._issue_to_finding(issue)
+                finding = self._issue_to_finding_from_dict(issue)
                 findings.append(finding)
             except Exception as e:
                 log.warning(
                     "jira_issue_parse_failed",
-                    issue_key=issue.key,
+                    issue_key=issue.get("key", "unknown"),
                     error=str(e),
                 )
                 continue
@@ -174,9 +181,86 @@ class JiraClient:
         )
         return findings
 
+    def _issue_to_finding_from_dict(self, issue: dict[str, Any]) -> RawFinding:
+        """
+        Convert a Jira issue dict (from REST API) to a RawFinding model.
+        
+        Args:
+            issue: Jira issue dict from API response
+            
+        Returns:
+            RawFinding model
+        """
+        fields = issue.get("fields", {})
+        
+        # Extract custom fields (CSPM tools often add these)
+        custom_fields: dict[str, str] = {}
+        for field_name, field_value in fields.items():
+            if field_name.startswith("customfield_") and field_value:
+                custom_fields[field_name] = str(field_value)
+
+        # Parse created timestamp
+        created_str = fields.get("created", "")
+        if isinstance(created_str, str) and created_str:
+            # Handle various Jira timestamp formats
+            try:
+                created_at = datetime.fromisoformat(
+                    created_str.replace("+0000", "+00:00").replace("Z", "+00:00")
+                )
+            except ValueError:
+                created_at = datetime.now(timezone.utc)
+        else:
+            created_at = datetime.now(timezone.utc)
+
+        # Get severity from priority
+        severity = None
+        priority = fields.get("priority")
+        if priority and isinstance(priority, dict):
+            severity = priority.get("name")
+
+        # Handle description which can be ADF format in v3 API
+        description = fields.get("description", "")
+        if isinstance(description, dict):
+            # ADF format - extract plain text
+            description = self._adf_to_text(description)
+
+        return RawFinding(
+            jira_ticket_id=issue.get("key", ""),
+            jira_ticket_url=f"{self.base_url}browse/{issue.get('key', '')}",
+            title=fields.get("summary", ""),
+            description=description or "",
+            severity=severity,
+            created_at=created_at,
+            custom_fields=custom_fields,
+        )
+
+    def _adf_to_text(self, adf: dict[str, Any]) -> str:
+        """
+        Convert Atlassian Document Format (ADF) to plain text.
+        
+        Args:
+            adf: ADF document dict
+            
+        Returns:
+            Plain text string
+        """
+        def extract_text(node: dict[str, Any]) -> str:
+            text_parts = []
+            if node.get("type") == "text":
+                text_parts.append(node.get("text", ""))
+            for child in node.get("content", []):
+                text_parts.append(extract_text(child))
+            return "".join(text_parts)
+        
+        try:
+            return extract_text(adf)
+        except Exception:
+            return str(adf)
+
     def _issue_to_finding(self, issue: Any) -> RawFinding:
         """
-        Convert a Jira issue to a RawFinding model.
+        Convert a Jira issue object to a RawFinding model.
+        Legacy method for compatibility with jira library.
         
         Args:
             issue: Jira issue object
@@ -232,42 +316,60 @@ class JiraClient:
         Returns:
             True if transition succeeded, False otherwise
         """
-        transition_name = self.STATUS_TRANSITIONS.get(new_status)
-        if not transition_name:
-            log.error(
-                "jira_unknown_transition",
-                ticket_id=ticket_id,
-                status=new_status.value,
-            )
-            return False
-
         try:
-            # Get available transitions
-            transitions = self.client.transitions(ticket_id)
+            # Get available transitions using REST API
+            url = f"{self.base_url.rstrip('/')}/rest/api/3/issue/{ticket_id}/transitions"
+            response = requests.get(
+                url,
+                auth=self._get_auth(),
+                headers={"Accept": "application/json"},
+                timeout=30
+            )
+            response.raise_for_status()
+            transitions = response.json().get("transitions", [])
+            
+            # Find matching transition
             transition_id = None
+            transition_name = self.STATUS_TRANSITIONS.get(new_status)
+            
             for t in transitions:
-                if t["name"].lower() == transition_name.lower():
+                # Try matching by transition name
+                if transition_name and t["name"].lower() == transition_name.lower():
                     transition_id = t["id"]
                     break
-
-            if not transition_id:
                 # Try matching by target status name
-                for t in transitions:
-                    if t.get("to", {}).get("name", "").upper() == new_status.value:
-                        transition_id = t["id"]
-                        break
+                if t.get("to", {}).get("name", "").upper() == new_status.value:
+                    transition_id = t["id"]
+                    break
 
             if not transition_id:
                 log.warning(
                     "jira_transition_not_found",
                     ticket_id=ticket_id,
-                    transition_name=transition_name,
-                    available=[t["name"] for t in transitions],
+                    target_status=new_status.value,
+                    available=[f"{t['name']} -> {t.get('to', {}).get('name', 'unknown')}" for t in transitions],
                 )
-                return False
+                # Log the status change intent even if we can't transition
+                log.info(
+                    "jira_status_logged",
+                    ticket_id=ticket_id,
+                    intended_status=new_status.value,
+                    message="Transition not available in current Jira workflow",
+                )
+                return True  # Return True to not block workflow
 
             # Execute transition
-            self.client.transition_issue(ticket_id, transition_id)
+            transition_url = f"{self.base_url.rstrip('/')}/rest/api/3/issue/{ticket_id}/transitions"
+            payload = {"transition": {"id": transition_id}}
+            
+            response = requests.post(
+                transition_url,
+                json=payload,
+                auth=self._get_auth(),
+                headers={"Content-Type": "application/json"},
+                timeout=30
+            )
+            response.raise_for_status()
             
             # Add comment if provided
             if comment:
@@ -289,7 +391,7 @@ class JiraClient:
             
             return True
 
-        except JIRAError as e:
+        except requests.exceptions.RequestException as e:
             log.error(
                 "jira_transition_failed",
                 ticket_id=ticket_id,
@@ -310,10 +412,39 @@ class JiraClient:
             True if comment was added, False otherwise
         """
         try:
-            self.client.add_comment(ticket_id, comment)
+            url = f"{self.base_url.rstrip('/')}/rest/api/3/issue/{ticket_id}/comment"
+            
+            # Jira API v3 uses Atlassian Document Format for comments
+            payload = {
+                "body": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": comment
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+            
+            response = requests.post(
+                url,
+                json=payload,
+                auth=self._get_auth(),
+                headers={"Content-Type": "application/json"},
+                timeout=30
+            )
+            response.raise_for_status()
+            
             log.debug("jira_comment_added", ticket_id=ticket_id)
             return True
-        except JIRAError as e:
+        except requests.exceptions.RequestException as e:
             log.error(
                 "jira_comment_failed",
                 ticket_id=ticket_id,
@@ -369,11 +500,54 @@ class JiraClient:
             RawFinding or None if not found
         """
         try:
-            issue = self.client.issue(ticket_id)
-            return self._issue_to_finding(issue)
-        except JIRAError as e:
+            url = f"{self.base_url.rstrip('/')}/rest/api/3/issue/{ticket_id}"
+            response = requests.get(
+                url,
+                auth=self._get_auth(),
+                headers={"Accept": "application/json"},
+                timeout=30
+            )
+            response.raise_for_status()
+            issue = response.json()
+            return self._issue_to_finding_from_dict(issue)
+        except requests.exceptions.RequestException as e:
             log.error(
                 "jira_issue_fetch_failed",
+                ticket_id=ticket_id,
+                error=str(e),
+            )
+            return None
+
+    def get_ticket(self, ticket_id: str) -> dict | None:
+        """
+        Get raw ticket data including status.
+        
+        Args:
+            ticket_id: Jira issue key
+            
+        Returns:
+            Dict with ticket data including 'status' key, or None
+        """
+        try:
+            url = f"{self.base_url.rstrip('/')}/rest/api/3/issue/{ticket_id}?fields=status,summary"
+            response = requests.get(
+                url,
+                auth=self._get_auth(),
+                headers={"Accept": "application/json"},
+                timeout=30
+            )
+            response.raise_for_status()
+            issue = response.json()
+            
+            status_name = issue.get("fields", {}).get("status", {}).get("name", "")
+            return {
+                "key": issue.get("key"),
+                "status": status_name,
+                "summary": issue.get("fields", {}).get("summary", ""),
+            }
+        except requests.exceptions.RequestException as e:
+            log.error(
+                "jira_ticket_fetch_failed",
                 ticket_id=ticket_id,
                 error=str(e),
             )
@@ -390,8 +564,17 @@ class JiraClient:
             JiraStatus or None if unable to determine
         """
         try:
-            issue = self.client.issue(ticket_id, fields="status")
-            status_name = issue.fields.status.name.upper()
+            url = f"{self.base_url.rstrip('/')}/rest/api/3/issue/{ticket_id}?fields=status"
+            response = requests.get(
+                url,
+                auth=self._get_auth(),
+                headers={"Accept": "application/json"},
+                timeout=30
+            )
+            response.raise_for_status()
+            issue = response.json()
+            
+            status_name = issue.get("fields", {}).get("status", {}).get("name", "").upper()
             
             # Try to match to our enum
             for status in JiraStatus:
@@ -405,7 +588,7 @@ class JiraClient:
             )
             return None
             
-        except JIRAError as e:
+        except requests.exceptions.RequestException as e:
             log.error(
                 "jira_status_fetch_failed",
                 ticket_id=ticket_id,

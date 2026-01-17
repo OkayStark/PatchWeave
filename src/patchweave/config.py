@@ -51,6 +51,10 @@ class Settings(BaseSettings):
         default="SEC",
         description="Jira project to monitor",
     )
+    jira_open_status: str = Field(
+        default="To Do",
+        description="Jira status name for open/new findings (e.g., 'To Do', 'Open', 'OPEN')",
+    )
     jira_poll_interval_seconds: int = Field(
         default=60,
         description="Polling interval for Jira in seconds",
@@ -118,6 +122,14 @@ class Settings(BaseSettings):
     google_api_key: Optional[str] = Field(
         default=None,
         description="Google API key for Gemini",
+    )
+    google_api_key_2: Optional[str] = Field(
+        default=None,
+        description="Second Google API key for rate limit rotation",
+    )
+    google_api_key_3: Optional[str] = Field(
+        default=None,
+        description="Third Google API key for rate limit rotation",
     )
     openai_api_key: Optional[str] = Field(
         default=None,

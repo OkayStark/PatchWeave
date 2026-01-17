@@ -20,6 +20,7 @@ from patchweave.agents.state import (
 from patchweave.config import settings
 from patchweave.integrations.jira import JiraClient
 from patchweave.logging import get_logger
+from patchweave.models.enums import JiraStatus
 from patchweave.models.finding import AnalyzedFinding
 from patchweave.models.playbook import Playbook, PlaybookMatch
 
@@ -110,7 +111,7 @@ class ApprovalHandler:
             workflow_id=state.workflow_id,
             jira_ticket_id=state.jira_ticket_id,
             playbook_id=playbook.id,
-            confidence=match.similarity_score,
+            confidence=getattr(match, 'similarity', getattr(match, 'similarity_score', 0.0)),
         )
         
         # Build approval request comment
@@ -130,7 +131,7 @@ class ApprovalHandler:
         # Update Jira status to PENDING APPROVAL
         self.jira_client.update_status(
             ticket_id=state.jira_ticket_id,
-            status="PENDING APPROVAL",
+            new_status=JiraStatus.PENDING_APPROVAL,
         )
         
         # Update workflow state
@@ -142,7 +143,7 @@ class ApprovalHandler:
             {
                 "jira_ticket_id": state.jira_ticket_id,
                 "playbook_id": playbook.id,
-                "confidence": match.similarity_score,
+                "confidence": getattr(match, 'similarity', getattr(match, 'similarity_score', 0.0)),
             },
         )
         
@@ -168,7 +169,8 @@ class ApprovalHandler:
         validation_summary = self._format_validation_results(state)
         
         # Confidence indicator
-        confidence_pct = match.similarity_score * 100
+        similarity = getattr(match, 'similarity', getattr(match, 'similarity_score', 0.0))
+        confidence_pct = similarity * 100
         if confidence_pct >= 90:
             confidence_indicator = "🟢 HIGH"
         elif confidence_pct >= 70:
@@ -194,7 +196,7 @@ h3. 🎯 Matched Playbook
 |ID|{playbook.id}|
 |Description|{playbook.description}|
 |Confidence|{confidence_indicator} ({confidence_pct:.1f}%)|
-|Match Tier|{match.match_tier.value}|
+|Match Tier|{getattr(match, 'tier', getattr(match, 'match_tier', 'unknown'))}|
 
 h3. ✅ Validation Results
 {validation_summary}
@@ -262,6 +264,10 @@ _Validation completed at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_
         """
         Check Jira for approval decision.
         
+        Checks both ticket status and comments for approval/rejection.
+        Accepts 'DONE' as approved since simple Jira workflows may not have
+        custom APPROVED status.
+        
         Args:
             state: Current workflow state
             
@@ -279,9 +285,21 @@ _Validation completed at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_
         
         jira_status = ticket.get("status", "").upper()
         
-        if jira_status == "APPROVED":
+        log.debug(
+            "checking_approval_status",
+            jira_ticket_id=state.jira_ticket_id,
+            current_status=jira_status,
+        )
+        
+        # Check status - accept DONE or APPROVED as approved
+        if jira_status in ("APPROVED", "DONE"):
+            log.info(
+                "approval_detected",
+                jira_ticket_id=state.jira_ticket_id,
+                status=jira_status,
+            )
             return ApprovalDecision.APPROVED
-        elif jira_status == "REJECTED":
+        elif jira_status in ("REJECTED", "CANCELLED", "CLOSED"):
             return ApprovalDecision.REJECTED
         else:
             # Check for timeout
@@ -333,7 +351,7 @@ _Validation completed at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_
         # Update Jira status to DEPLOYING
         self.jira_client.update_status(
             ticket_id=state.jira_ticket_id,
-            status="DEPLOYING",
+            new_status=JiraStatus.DEPLOYING,
         )
         
         # Trigger callback if registered
@@ -481,16 +499,16 @@ _PatchWeave Workflow ID: {state.workflow_id}_
         details = details or {}
         
         if success:
-            status = "RESOLVED"
+            new_status = JiraStatus.RESOLVED
             comment = self._build_success_comment(state, details)
         else:
-            status = "DEPLOYMENT FAILED"
+            new_status = JiraStatus.DEPLOYMENT_FAILED
             comment = self._build_failure_comment(state, details)
         
         # Update Jira status
         self.jira_client.update_status(
             ticket_id=state.jira_ticket_id,
-            status=status,
+            new_status=new_status,
         )
         
         # Post result comment
