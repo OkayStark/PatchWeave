@@ -281,9 +281,27 @@ class PatchWeaveApp:
             })
             return state
         
-        # 6. Validate in test environment (skip if Terraform not available)
+        # 6. Validate in test environment (requires Terraform + LocalStack)
         import shutil
-        if shutil.which('terraform'):
+        import requests
+        
+        terraform_available = shutil.which('terraform') is not None
+        localstack_available = False
+        
+        if terraform_available:
+            # Check if LocalStack test endpoint is reachable
+            try:
+                response = requests.get(f"{settings.localstack_test_endpoint}/_localstack/health", timeout=5)
+                localstack_available = response.status_code == 200
+            except requests.exceptions.RequestException:
+                localstack_available = False
+        
+        if terraform_available and localstack_available:
+            log.info(
+                "validation_starting",
+                workflow_id=state.workflow_id,
+                localstack_endpoint=settings.localstack_test_endpoint,
+            )
             state = self._validator.validate_playbook(
                 state=state,
                 playbook=playbook,
@@ -294,12 +312,19 @@ class PatchWeaveApp:
                 state.phase = WorkflowPhase.FAILED
                 return state
         else:
+            skip_reasons = []
+            if not terraform_available:
+                skip_reasons.append("terraform_not_installed")
+            if not localstack_available:
+                skip_reasons.append("localstack_not_reachable")
+            
             log.warning(
-                "validation_skipped_no_terraform",
+                "validation_skipped",
                 workflow_id=state.workflow_id,
-                message="Terraform not installed, skipping validation step"
+                reasons=skip_reasons,
+                message=f"Validation skipped: {', '.join(skip_reasons)}"
             )
-            state.add_event("validation_skipped", {"reason": "terraform_not_installed"})
+            state.add_event("validation_skipped", {"reasons": skip_reasons})
         
         # 7. Request approval
         state = self._approval_handler.request_approval(

@@ -91,11 +91,17 @@ class Settings(BaseSettings):
     aws_prod_region: str = Field(default="us-east-1", description="AWS prod region")
 
     # -------------------------------------------------------------------------
-    # LocalStack Configuration
+    # LocalStack Configuration (Dual Environment)
+    # TEST: Used for validation (creates/deletes resources)
+    # PROD: Used for actual remediation
     # -------------------------------------------------------------------------
-    localstack_endpoint: str = Field(
+    localstack_test_endpoint: str = Field(
         default="http://localhost:4566",
-        description="LocalStack endpoint URL",
+        description="LocalStack TEST endpoint URL (for validation)",
+    )
+    localstack_prod_endpoint: str = Field(
+        default="http://localhost:4567",
+        description="LocalStack PROD endpoint URL (for remediation)",
     )
     use_localstack: bool = Field(
         default=True,
@@ -239,7 +245,7 @@ class Settings(BaseSettings):
         Get AWS configuration for the specified environment.
 
         Args:
-            environment: Either 'test' or 'production'
+            environment: Either 'test' (validation) or 'production' (remediation)
 
         Returns:
             Dictionary with AWS configuration suitable for boto3 client/resource
@@ -254,9 +260,17 @@ class Settings(BaseSettings):
                 "region_name": self.aws_test_region,
             }
             if self.use_localstack:
-                config["endpoint_url"] = self.localstack_endpoint
+                config["endpoint_url"] = self.localstack_test_endpoint
             return config
         elif environment == "production":
+            if self.use_localstack:
+                # Use LocalStack prod for development/testing
+                return {
+                    "aws_access_key_id": self.aws_test_access_key_id,
+                    "aws_secret_access_key": self.aws_test_secret_access_key,
+                    "region_name": self.aws_test_region,
+                    "endpoint_url": self.localstack_prod_endpoint,
+                }
             if not self.aws_prod_access_key_id or not self.aws_prod_secret_access_key:
                 raise ValueError("Production AWS credentials not configured")
             return {
@@ -266,6 +280,10 @@ class Settings(BaseSettings):
             }
         else:
             raise ValueError(f"Unknown environment: {environment}. Use 'test' or 'production'")
+
+    def get_chroma_url(self) -> str:
+        """Get the ChromaDB URL."""
+        return f"http://{self.chroma_host}:{self.chroma_port}"
 
     def get_chroma_url(self) -> str:
         """Get the ChromaDB URL."""

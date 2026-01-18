@@ -49,10 +49,11 @@ class ValidatorAgent:
         Initialize the validator.
         
         Args:
-            localstack_endpoint: LocalStack endpoint URL
+            localstack_endpoint: LocalStack endpoint URL (defaults to TEST endpoint)
             terraform_templates_dir: Directory containing Terraform templates
         """
-        self.localstack_endpoint = localstack_endpoint or settings.localstack_endpoint
+        # Use TEST endpoint for validation (creates/deletes test resources)
+        self.localstack_endpoint = localstack_endpoint or settings.localstack_test_endpoint
         self.terraform_templates_dir = Path(
             terraform_templates_dir or settings.terraform_templates_directory
         )

@@ -184,26 +184,47 @@ class DeployerAgent:
         Execute actual production deployment.
         
         This is the ONLY method that modifies production resources.
+        In development mode with USE_LOCALSTACK=true, uses LocalStack PROD endpoint.
         """
         log.info(
             "executing_production_deployment",
             workflow_id=state.workflow_id,
             playbook_id=playbook.id,
             resource_type=playbook.resource_type,
+            use_localstack=settings.use_localstack,
             _audit=True,
         )
         
         # Prepare code with token substitution
         code = self._prepare_code(playbook.remediation_code, token_mapping)
         
+        # Get AWS config for production (uses LocalStack PROD in dev mode)
+        aws_config = settings.get_aws_config("production")
+        
         # Create execution environment with production credentials
-        session = boto3.Session(region_name=self.aws_region)
+        session = boto3.Session(
+            aws_access_key_id=aws_config.get("aws_access_key_id"),
+            aws_secret_access_key=aws_config.get("aws_secret_access_key"),
+            region_name=aws_config.get("region_name", self.aws_region),
+        )
+        
+        # Get endpoint URL if using LocalStack
+        endpoint_url = aws_config.get("endpoint_url")
         
         namespace = {
             "boto3": boto3,
             "session": session,
+            "endpoint_url": endpoint_url,  # Pass to remediation code
             "__builtins__": self._get_restricted_builtins(),
         }
+        
+        # Log if using LocalStack
+        if endpoint_url:
+            log.info(
+                "using_localstack_prod",
+                endpoint=endpoint_url,
+                workflow_id=state.workflow_id,
+            )
         
         try:
             # Execute remediation
