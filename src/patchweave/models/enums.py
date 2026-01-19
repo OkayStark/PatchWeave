@@ -83,6 +83,9 @@ class VulnerabilityType(str, Enum):
     IAM_ROOT_ACCOUNT_USAGE = "iam_root_account_usage"
     IAM_MFA_DISABLED = "iam_mfa_disabled"
     KMS_KEY_ROTATION_DISABLED = "kms_key_rotation_disabled"
+    LAMBDA_PUBLIC = "lambda_public"
+    EC2_IMDSV1 = "ec2_imdsv1"
+    ELB_LOGGING_DISABLED = "elb_logging"
     UNKNOWN = "unknown"
 
     @classmethod

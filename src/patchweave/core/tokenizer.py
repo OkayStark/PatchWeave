@@ -54,6 +54,13 @@ AWS_PATTERNS: list[TokenPattern] = [
         token_name="BUCKET_NAME",
         description="S3 Bucket Name (from ARN)",
     ),
+    # S3 Bucket names after "Bucket" or "Resource:" labels
+    TokenPattern(
+        name="s3_bucket_labeled",
+        pattern=re.compile(r'(?:S3 [Bb]ucket|Resource:)\s*([a-z0-9][a-z0-9.\-]{1,61}[a-z0-9])'),
+        token_name="BUCKET_NAME",
+        description="S3 Bucket Name (labeled)",
+    ),
     # EC2 Instance IDs
     TokenPattern(
         name="ec2_instance_id",

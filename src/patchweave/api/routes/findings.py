@@ -212,7 +212,7 @@ async def retry_finding(finding_id: str) -> RetryResponse:
         raise HTTPException(status_code=404, detail=f"Finding {finding_id} not found")
     
     # Import here to avoid circular imports
-    from patchweave.queue import get_finding_queue
+    from patchweave.core.queue import get_finding_queue
     
     queue = get_finding_queue()
     

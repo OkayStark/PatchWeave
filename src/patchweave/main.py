@@ -103,12 +103,20 @@ class PatchWeaveApp:
             high_confidence_threshold=settings.high_confidence_threshold,
             moderate_confidence_threshold=settings.moderate_confidence_threshold,
             deployment_dry_run=settings.deployment_dry_run,
+            use_llm=settings.use_llm,
         )
         
-        # Load playbooks
+        # Load playbooks and index them into ChromaDB
         try:
             playbooks = self._playbook_loader.load_all()
             log.info("playbooks_loaded", count=len(playbooks))
+            
+            # Index playbooks into ChromaDB for semantic search
+            if playbooks:
+                from patchweave.core.chromadb import get_playbook_store
+                store = get_playbook_store()
+                store.add_playbooks(playbooks)
+                log.info("playbooks_indexed", count=len(playbooks))
         except Exception as e:
             log.error("playbook_loading_failed", error=str(e))
 
@@ -231,17 +239,125 @@ class PatchWeaveApp:
             log.error("workflow_failed", ticket_id=ticket_id, error=str(e))
             self._finding_queue.fail_item(ticket_id, str(e))
     
+    async def _create_finding_without_llm(self, raw_finding: Any) -> Any:
+        """
+        Create an AnalyzedFinding without using LLM.
+        
+        Used when USE_LLM=false. Creates a basic AnalyzedFinding from
+        the raw finding data, allowing ChromaDB to do semantic matching
+        directly on the title/description text.
+        """
+        from patchweave.models.finding import AnalyzedFinding
+        from patchweave.models.enums import VulnerabilityType, Severity, CloudProvider
+        from patchweave.core.tokenizer import get_tokenizer
+        
+        ticket_id = raw_finding.jira_ticket_id
+        
+        # Tokenize the finding to extract sensitive data
+        tokenizer = get_tokenizer()
+        sanitized_title, sanitized_description, token_mapping = tokenizer.tokenize_finding(
+            title=raw_finding.title,
+            description=raw_finding.description,
+            finding_id=ticket_id,
+        )
+        
+        # Try to infer severity from raw finding
+        severity = Severity.MEDIUM
+        if raw_finding.severity:
+            raw_sev = raw_finding.severity.lower()
+            if "critical" in raw_sev:
+                severity = Severity.CRITICAL
+            elif "high" in raw_sev:
+                severity = Severity.HIGH
+            elif "low" in raw_sev:
+                severity = Severity.LOW
+        
+        # Try to infer resource type from title/description
+        resource_type = "AWS::Unknown::Resource"
+        title_lower = raw_finding.title.lower()
+        desc_lower = raw_finding.description.lower()
+        combined = f"{title_lower} {desc_lower}"
+        
+        if "s3" in combined or "bucket" in combined:
+            resource_type = "AWS::S3::Bucket"
+        elif "ec2" in combined or "instance" in combined:
+            resource_type = "AWS::EC2::Instance"
+        elif "security group" in combined or "securitygroup" in combined:
+            resource_type = "AWS::EC2::SecurityGroup"
+        elif "rds" in combined or "database" in combined:
+            resource_type = "AWS::RDS::DBInstance"
+        elif "iam" in combined or "user" in combined or "role" in combined:
+            resource_type = "AWS::IAM::User"
+        elif "kms" in combined or "key" in combined:
+            resource_type = "AWS::KMS::Key"
+        elif "ebs" in combined or "volume" in combined:
+            resource_type = "AWS::EC2::Volume"
+        elif "lambda" in combined or "function" in combined:
+            resource_type = "AWS::Lambda::Function"
+        elif "elb" in combined or "load balancer" in combined:
+            resource_type = "AWS::ElasticLoadBalancing::LoadBalancer"
+        elif "cloudtrail" in combined:
+            resource_type = "AWS::CloudTrail::Trail"
+        
+        # Build search query from title and description (for ChromaDB matching)
+        search_query = f"{sanitized_title} {sanitized_description}"
+        
+        # Store token mapping in the token store (same as analyzer does)
+        from patchweave.core.tokenizer import get_token_store
+        token_store = get_token_store()
+        token_store.store(token_mapping)
+        
+        log.info(
+            "finding_created_without_llm",
+            ticket_id=ticket_id,
+            inferred_resource_type=resource_type,
+            inferred_severity=severity.value,
+            token_count=len(token_mapping.tokens),
+        )
+        
+        return AnalyzedFinding(
+            finding_id=ticket_id,
+            vulnerability_type=VulnerabilityType.UNKNOWN,  # Let ChromaDB find the best match
+            cloud_provider=CloudProvider.AWS,
+            resource_type=resource_type,
+            severity=severity,
+            search_query=search_query,
+            sanitized_title=sanitized_title,
+            sanitized_description=sanitized_description,
+            token_keys=list(token_mapping.tokens.keys()),
+            source_ticket_url=raw_finding.jira_ticket_url,
+            detected_at=raw_finding.created_at,
+            analysis_confidence=0.5,  # Lower confidence since no LLM analysis
+        )
+    
     async def _run_remediation_workflow(self, raw_finding: Any) -> Any:
         """Run the complete remediation workflow for a finding."""
         from patchweave.agents.state import WorkflowPhase, WorkflowState
-        from patchweave.models.finding import RawFinding
+        from patchweave.models.finding import RawFinding, AnalyzedFinding
         from patchweave.core.matcher import MatchTier
+        from patchweave.models.enums import VulnerabilityType, Severity, CloudProvider
         import uuid
         
         ticket_id = raw_finding.jira_ticket_id
         
-        # 1. Analyze the finding with AI
-        analyzed_finding = await self._analyzer.analyze(raw_finding)
+        # Update Jira status to Analyzing
+        from patchweave.models.enums import JiraStatus
+        self._jira_client.update_status(ticket_id, JiraStatus.ANALYZING)
+        
+        # Check if LLM is enabled
+        if settings.use_llm:
+            # 1. Analyze the finding with AI
+            analyzed_finding = await self._analyzer.analyze(raw_finding)
+        else:
+            # LLM disabled - create AnalyzedFinding directly and match via ChromaDB
+            log.info(
+                "llm_disabled_direct_matching",
+                ticket_id=ticket_id,
+                message="Skipping LLM analysis, using direct ChromaDB matching",
+            )
+            
+            # Create a basic AnalyzedFinding from raw finding for direct matching
+            analyzed_finding = await self._create_finding_without_llm(raw_finding)
         
         # 2. Match to playbook
         match_result = self._playbook_matcher.match(analyzed_finding)
@@ -252,6 +368,13 @@ class PatchWeaveApp:
             jira_ticket_id=ticket_id,
             analyzed_finding=analyzed_finding,
         )
+        
+        # Get token mapping from the token store (populated during analysis or _create_finding_without_llm)
+        from patchweave.core.tokenizer import get_token_store
+        token_store = get_token_store()
+        token_mapping_obj = token_store.get(ticket_id)
+        if token_mapping_obj:
+            state.token_mapping = token_mapping_obj.tokens
         
         # Start the workflow
         self._coordinator.start_workflow(state)
@@ -297,6 +420,9 @@ class PatchWeaveApp:
                 localstack_available = False
         
         if terraform_available and localstack_available:
+            # Update Jira status to Validating
+            self._jira_client.update_status(ticket_id, JiraStatus.VALIDATING)
+            
             log.info(
                 "validation_starting",
                 workflow_id=state.workflow_id,

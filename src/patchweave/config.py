@@ -125,6 +125,10 @@ class Settings(BaseSettings):
         default="gemini",
         description="LLM provider to use: 'gemini' or 'openai'",
     )
+    use_llm: bool = Field(
+        default=True,
+        description="Enable LLM for analysis. If False, uses direct ChromaDB matching only.",
+    )
     google_api_key: Optional[str] = Field(
         default=None,
         description="Google API key for Gemini",

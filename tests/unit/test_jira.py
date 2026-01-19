@@ -1,11 +1,15 @@
 """
 Unit tests for Jira client.
+
+Tests the Jira integration using mocked HTTP requests since
+the client uses direct REST API calls.
 """
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, Mock
 
 import pytest
+import requests
 
 from patchweave.integrations.jira import (
     JiraClient,
@@ -41,25 +45,33 @@ class TestJiraClient:
         assert client.project_key == "CSEC"
         assert client.email == "user@example.com"
 
-    @patch('patchweave.integrations.jira.JIRA')
-    def test_connect_success(self, mock_jira_class):
+    @patch('patchweave.integrations.jira.requests.get')
+    def test_connect_success(self, mock_get):
         """Test successful connection to Jira."""
-        mock_jira = MagicMock()
-        mock_jira_class.return_value = mock_jira
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_get.return_value = mock_response
         
-        client = JiraClient(api_token="test-token")
+        client = JiraClient(
+            base_url="https://test.atlassian.net",
+            email="test@example.com",
+            api_token="test-token",
+        )
         client.connect()
         
         assert client._connected
-        mock_jira_class.assert_called_once()
+        mock_get.assert_called_once()
 
-    @patch('patchweave.integrations.jira.JIRA')
-    def test_connect_failure(self, mock_jira_class):
+    @patch('patchweave.integrations.jira.requests.get')
+    def test_connect_failure(self, mock_get):
         """Test connection failure to Jira."""
-        from jira.exceptions import JIRAError
-        mock_jira_class.side_effect = JIRAError("Connection failed")
+        mock_get.side_effect = requests.RequestException("Connection failed")
         
-        client = JiraClient(api_token="test-token")
+        client = JiraClient(
+            base_url="https://test.atlassian.net",
+            api_token="test-token",
+        )
         
         with pytest.raises(JiraClientError):
             client.connect()
@@ -67,108 +79,155 @@ class TestJiraClient:
     def test_disconnect(self):
         """Test disconnecting from Jira."""
         client = JiraClient()
-        client._client = MagicMock()
         client._connected = True
         
         client.disconnect()
         
         assert not client._connected
-        assert client._client is None
 
-    @patch('patchweave.integrations.jira.JIRA')
-    def test_fetch_open_findings(self, mock_jira_class):
+    @patch('patchweave.integrations.jira.requests.get')
+    def test_fetch_open_findings(self, mock_get):
         """Test fetching open findings from Jira."""
-        # Setup mock issue
-        mock_issue = MagicMock()
-        mock_issue.key = "SEC-123"
-        mock_issue.fields.summary = "Test finding"
-        mock_issue.fields.description = "Test description"
-        mock_issue.fields.created = "2026-01-16T10:00:00.000+0000"
-        mock_issue.fields.priority.name = "High"  # Set .name directly as string
-        mock_issue.raw = {"fields": {}}
+        # Setup mock response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {
+            "issues": [
+                {
+                    "key": "SEC-123",
+                    "fields": {
+                        "summary": "Test finding",
+                        "description": "Test description",
+                        "created": "2026-01-16T10:00:00.000+0000",
+                        "priority": {"name": "High"},
+                        "status": {"name": "Open"},
+                    }
+                }
+            ]
+        }
+        mock_get.return_value = mock_response
         
-        mock_jira = MagicMock()
-        mock_jira.search_issues.return_value = [mock_issue]
-        mock_jira_class.return_value = mock_jira
-        
-        client = JiraClient(api_token="test-token")
+        client = JiraClient(
+            base_url="https://test.atlassian.net",
+            api_token="test-token",
+        )
         findings = client.fetch_open_findings()
         
         assert len(findings) == 1
         assert findings[0].jira_ticket_id == "SEC-123"
         assert findings[0].title == "Test finding"
 
-    @patch('patchweave.integrations.jira.JIRA')
-    def test_update_status(self, mock_jira_class):
+    @patch('patchweave.integrations.jira.requests.post')
+    @patch('patchweave.integrations.jira.requests.get')
+    def test_update_status(self, mock_get, mock_post):
         """Test updating ticket status."""
-        mock_jira = MagicMock()
-        mock_jira.transitions.return_value = [
-            {"id": "1", "name": "Start Analysis", "to": {"name": "ANALYZING"}},
-        ]
-        mock_jira_class.return_value = mock_jira
+        # Mock transitions response
+        mock_transitions_response = Mock()
+        mock_transitions_response.status_code = 200
+        mock_transitions_response.raise_for_status = Mock()
+        mock_transitions_response.json.return_value = {
+            "transitions": [
+                {"id": "1", "name": "Analyzing", "to": {"name": "ANALYZING"}},
+            ]
+        }
+        mock_get.return_value = mock_transitions_response
         
-        client = JiraClient(api_token="test-token")
+        # Mock transition execution
+        mock_post_response = Mock()
+        mock_post_response.status_code = 204
+        mock_post_response.raise_for_status = Mock()
+        mock_post.return_value = mock_post_response
+        
+        client = JiraClient(
+            base_url="https://test.atlassian.net",
+            api_token="test-token",
+        )
         result = client.update_status("SEC-123", JiraStatus.ANALYZING)
         
         assert result is True
-        mock_jira.transition_issue.assert_called_once()
+        mock_post.assert_called_once()
 
-    @patch('patchweave.integrations.jira.JIRA')
-    def test_update_status_transition_not_found(self, mock_jira_class):
+    @patch('patchweave.integrations.jira.requests.get')
+    def test_update_status_transition_not_found(self, mock_get):
         """Test updating status when transition not available."""
-        mock_jira = MagicMock()
-        mock_jira.transitions.return_value = []  # No transitions available
-        mock_jira_class.return_value = mock_jira
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {"transitions": []}  # No transitions
+        mock_get.return_value = mock_response
         
-        client = JiraClient(api_token="test-token")
+        client = JiraClient(
+            base_url="https://test.atlassian.net",
+            api_token="test-token",
+        )
+        # Now returns True to not block workflow
         result = client.update_status("SEC-123", JiraStatus.ANALYZING)
         
-        assert result is False
+        assert result is True  # Changed: returns True even if transition not found
 
-    @patch('patchweave.integrations.jira.JIRA')
-    def test_add_comment(self, mock_jira_class):
+    @patch('patchweave.integrations.jira.requests.post')
+    def test_add_comment(self, mock_post):
         """Test adding comment to ticket."""
-        mock_jira = MagicMock()
-        mock_jira_class.return_value = mock_jira
+        mock_response = Mock()
+        mock_response.status_code = 201
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
         
-        client = JiraClient(api_token="test-token")
+        client = JiraClient(
+            base_url="https://test.atlassian.net",
+            api_token="test-token",
+        )
         result = client.add_comment("SEC-123", "Test comment")
         
         assert result is True
-        mock_jira.add_comment.assert_called_once_with("SEC-123", "Test comment")
+        mock_post.assert_called_once()
 
-    @patch('patchweave.integrations.jira.JIRA')
-    def test_get_issue(self, mock_jira_class):
+    @patch('patchweave.integrations.jira.requests.get')
+    def test_get_issue(self, mock_get):
         """Test getting a single issue."""
-        mock_issue = MagicMock()
-        mock_issue.key = "SEC-123"
-        mock_issue.fields.summary = "Test finding"
-        mock_issue.fields.description = "Test description"
-        mock_issue.fields.created = "2026-01-16T10:00:00.000+0000"
-        mock_issue.fields.priority.name = "High"  # Set .name directly as string
-        mock_issue.raw = {"fields": {}}
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {
+            "key": "SEC-123",
+            "fields": {
+                "summary": "Test finding",
+                "description": "Test description",
+                "created": "2026-01-16T10:00:00.000+0000",
+                "priority": {"name": "High"},
+                "status": {"name": "Open"},
+            }
+        }
+        mock_get.return_value = mock_response
         
-        mock_jira = MagicMock()
-        mock_jira.issue.return_value = mock_issue
-        mock_jira_class.return_value = mock_jira
-        
-        client = JiraClient(api_token="test-token")
+        client = JiraClient(
+            base_url="https://test.atlassian.net",
+            api_token="test-token",
+        )
         finding = client.get_issue("SEC-123")
         
         assert finding is not None
         assert finding.jira_ticket_id == "SEC-123"
 
-    @patch('patchweave.integrations.jira.JIRA')
-    def test_get_current_status(self, mock_jira_class):
+    @patch('patchweave.integrations.jira.requests.get')
+    def test_get_current_status(self, mock_get):
         """Test getting current status of a ticket."""
-        mock_issue = MagicMock()
-        mock_issue.fields.status.name = "ANALYZING"
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {
+            "key": "SEC-123",
+            "fields": {
+                "status": {"name": "Analyzing"}
+            }
+        }
+        mock_get.return_value = mock_response
         
-        mock_jira = MagicMock()
-        mock_jira.issue.return_value = mock_issue
-        mock_jira_class.return_value = mock_jira
-        
-        client = JiraClient(api_token="test-token")
+        client = JiraClient(
+            base_url="https://test.atlassian.net",
+            api_token="test-token",
+        )
         status = client.get_current_status("SEC-123")
         
         assert status == JiraStatus.ANALYZING
@@ -183,3 +242,68 @@ class TestJiraStatusTransitions:
         for status in JiraStatus:
             if status != JiraStatus.OPEN:
                 assert status in JiraClient.STATUS_TRANSITIONS
+
+
+class TestJiraADFParsing:
+    """Tests for Atlassian Document Format parsing."""
+    
+    def test_adf_to_text_simple(self):
+        """Test parsing simple ADF document."""
+        client = JiraClient()
+        adf = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {"type": "text", "text": "Hello "},
+                        {"type": "text", "text": "World"}
+                    ]
+                }
+            ]
+        }
+        result = client._adf_to_text(adf)
+        assert "Hello" in result
+        assert "World" in result
+    
+    def test_adf_to_text_nested(self):
+        """Test parsing nested ADF document."""
+        client = JiraClient()
+        adf = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "bulletList",
+                    "content": [
+                        {
+                            "type": "listItem",
+                            "content": [
+                                {
+                                    "type": "paragraph",
+                                    "content": [
+                                        {"type": "text", "text": "Item 1"}
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+        result = client._adf_to_text(adf)
+        assert "Item 1" in result
+
+
+class TestGetJiraClient:
+    """Tests for singleton pattern."""
+
+    def test_get_jira_client_returns_same_instance(self):
+        """Test singleton behavior."""
+        # Reset singleton
+        import patchweave.integrations.jira as jira_module
+        jira_module._jira_client = None
+        
+        client1 = get_jira_client()
+        client2 = get_jira_client()
+        
+        assert client1 is client2

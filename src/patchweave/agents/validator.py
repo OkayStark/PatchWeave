@@ -222,19 +222,32 @@ class ValidatorAgent:
         # Generate Terraform configuration
         tf_config = self._generate_terraform(playbook, token_mapping)
         
-        # Create temporary directory for Terraform
-        with tempfile.TemporaryDirectory() as tf_dir:
+        # Create temporary directory for Terraform (NOT using context manager!)
+        # We need this directory to persist until cleanup
+        tf_dir = tempfile.mkdtemp(prefix="patchweave_tf_")
+        
+        try:
             tf_path = Path(tf_dir) / "main.tf"
             tf_path.write_text(tf_config)
+            
+            log.info("terraform_config_written", tf_dir=tf_dir, config_length=len(tf_config))
             
             # Initialize Terraform
             self._run_terraform_command(["init"], tf_dir)
             
-            # Apply Terraform
+            # Apply Terraform (without -json for cleaner output)
             apply_output = self._run_terraform_command(
-                ["apply", "-auto-approve", "-json"],
+                ["apply", "-auto-approve"],
                 tf_dir,
             )
+            
+            # Get terraform outputs
+            tf_outputs = self._get_terraform_outputs(tf_dir)
+            
+            # Get the bucket name from terraform output or token_mapping as fallback
+            bucket_name = tf_outputs.get("bucket_name", token_mapping.get("BUCKET_NAME", "test-vulnerable-bucket"))
+            
+            log.info("terraform_environment_ready", bucket_name=bucket_name)
             
             # Parse outputs
             return {
@@ -243,7 +256,15 @@ class ValidatorAgent:
                 "created_at": datetime.utcnow().isoformat(),
                 "resources": self._parse_terraform_state(tf_dir),
                 "apply_output": apply_output,
+                "bucket_name": bucket_name,  # Pass bucket name for code execution
+                "token_mapping": token_mapping,  # Keep original mapping
+                "terraform_outputs": tf_outputs,
             }
+        except Exception as e:
+            # Clean up on failure
+            import shutil
+            shutil.rmtree(tf_dir, ignore_errors=True)
+            raise
     
     def _generate_terraform(
         self,
@@ -300,14 +321,19 @@ provider "aws" {{
         token_mapping: dict[str, str],
     ) -> str:
         """Generate resource-specific Terraform based on playbook type."""
+        import uuid
         vuln_type = playbook.vulnerability_type.value
+        
+        # Generate a unique suffix for test buckets to avoid conflicts
+        unique_suffix = str(uuid.uuid4())[:8]
         
         # S3 Bucket without encryption (for s3_encryption_disabled)
         if vuln_type == "s3_encryption_disabled":
-            bucket_name = token_mapping.get("BUCKET_NAME", "test-vulnerable-bucket")
+            bucket_name = f"test-vuln-{unique_suffix}"
             return f'''
 resource "aws_s3_bucket" "vulnerable" {{
-  bucket = "{bucket_name}"
+  bucket        = "{bucket_name}"
+  force_destroy = true
 }}
 
 output "bucket_name" {{
@@ -317,10 +343,11 @@ output "bucket_name" {{
         
         # S3 Bucket with public access (for s3_public_access)
         elif vuln_type == "s3_public_access":
-            bucket_name = token_mapping.get("BUCKET_NAME", "test-public-bucket")
+            bucket_name = f"test-public-{unique_suffix}"
             return f'''
 resource "aws_s3_bucket" "vulnerable" {{
-  bucket = "{bucket_name}"
+  bucket        = "{bucket_name}"
+  force_destroy = true
 }}
 
 resource "aws_s3_bucket_public_access_block" "vulnerable" {{
@@ -379,7 +406,7 @@ output "status" {
         """Run a Terraform command and return output."""
         cmd = ["terraform"] + args
         
-        log.debug(
+        log.info(
             "running_terraform_command",
             command=" ".join(cmd),
             working_dir=working_dir,
@@ -391,21 +418,37 @@ output "status" {
                 cwd=working_dir,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=180,  # 3 minute timeout
             )
             
             if result.returncode != 0:
+                # With -json flag, errors go to stdout not stderr
+                error_detail = result.stderr or result.stdout
                 log.error(
                     "terraform_command_failed",
                     command=" ".join(cmd),
                     stderr=result.stderr,
+                    stdout=result.stdout[:2000] if result.stdout else None,  # Truncate for logging
+                    return_code=result.returncode,
                 )
-                raise TerraformError(f"Terraform failed: {result.stderr}")
+                raise TerraformError(f"Terraform failed (rc={result.returncode}): {error_detail[:500]}")
                 
             return result.stdout
             
         except subprocess.TimeoutExpired:
             raise TerraformError("Terraform command timed out")
+    
+    def _get_terraform_outputs(self, tf_dir: str) -> dict[str, str]:
+        """Get terraform outputs as a dictionary."""
+        try:
+            output = self._run_terraform_command(["output", "-json"], tf_dir)
+            import json
+            outputs_json = json.loads(output)
+            # Terraform outputs are wrapped in {"value": ..., "type": ...}
+            return {k: v.get("value") for k, v in outputs_json.items()}
+        except Exception as e:
+            log.warning("failed_to_get_terraform_outputs", error=str(e))
+            return {}
     
     def _parse_terraform_state(self, tf_dir: str) -> list[str]:
         """Parse Terraform state to get created resource IDs."""
@@ -526,6 +569,7 @@ output "status" {
             workflow_id=state.workflow_id,
         )
         
+        import shutil
         tf_dir = environment.get("terraform_dir")
         
         if tf_dir and Path(tf_dir).exists():
@@ -540,8 +584,10 @@ output "status" {
                     workflow_id=state.workflow_id,
                     error=str(e),
                 )
-                # Re-raise to mark cleanup as failed
-                raise
+                # Continue to cleanup the directory even if destroy fails
+            finally:
+                # ALWAYS clean up the temp directory
+                shutil.rmtree(tf_dir, ignore_errors=True)
         
         return {
             "destroyed": True,
@@ -569,7 +615,12 @@ output "status" {
         
         result = code
         for token, value in full_mapping.items():
-            result = result.replace(f"{{{{{token}}}}}", str(value))
+            placeholder = f"{{{{{token}}}}}"
+            if placeholder in result:
+                log.info("substituting_token", token=token, value=value)
+            result = result.replace(placeholder, str(value))
+        
+        log.debug("token_substitution_complete", code_preview=result[:200] if result else "")
         
         return result
     
@@ -584,36 +635,33 @@ output "status" {
         NOTE: In production, this would use a proper sandbox
         (e.g., RestrictedPython, subprocess isolation).
         """
-        log.debug("executing_code", code_length=len(code))
+        log.info("executing_code", code_length=len(code), bucket_name=environment.get("bucket_name"))
+        
+        # Set AWS credentials for LocalStack (required even though LocalStack doesn't validate them)
+        import os
+        os.environ.setdefault("AWS_ACCESS_KEY_ID", "test")
+        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "test")
+        os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
         
         # Create execution namespace with AWS clients
         import boto3
+        import botocore
+        from botocore.exceptions import ClientError
         
         namespace = {
             "boto3": boto3,
-            "__builtins__": {
-                # Restricted builtins
-                "print": print,
-                "dict": dict,
-                "list": list,
-                "str": str,
-                "int": int,
-                "float": float,
-                "bool": bool,
-                "True": True,
-                "False": False,
-                "None": None,
-                "all": all,
-                "any": any,
-                "len": len,
-                "range": range,
-                "Exception": Exception,
-            },
+            "botocore": botocore,
+            "ClientError": ClientError,  # For exception handling in playbooks
+            "__builtins__": __builtins__,  # Allow imports in playbook code
         }
         
         try:
             # Execute the code
             exec(code, namespace)
+            
+            # Get bucket name from environment
+            bucket_name = environment.get("bucket_name", "test-bucket")
+            endpoint_url = environment.get("endpoint_url", self.localstack_endpoint)
             
             # Look for result in namespace
             if "result" in namespace:
@@ -621,17 +669,20 @@ output "status" {
             elif "pre_check" in namespace:
                 # Call pre_check function
                 return namespace["pre_check"](
-                    bucket_name=environment.get("bucket_name", "test-bucket"),
+                    bucket_name=bucket_name,
+                    endpoint_url=endpoint_url,
                 )
             elif "remediate" in namespace:
                 # Call remediate function
                 return namespace["remediate"](
-                    bucket_name=environment.get("bucket_name", "test-bucket"),
+                    bucket_name=bucket_name,
+                    endpoint_url=endpoint_url,
                 )
             elif "post_check" in namespace:
                 # Call post_check function
                 return namespace["post_check"](
-                    bucket_name=environment.get("bucket_name", "test-bucket"),
+                    bucket_name=bucket_name,
+                    endpoint_url=endpoint_url,
                 )
             else:
                 return {"executed": True}

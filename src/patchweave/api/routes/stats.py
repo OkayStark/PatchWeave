@@ -123,7 +123,7 @@ async def get_statistics() -> SystemStats:
     
     # Get playbook count
     try:
-        from patchweave.knowledge.loader import get_playbook_loader
+        from patchweave.core.loader import get_playbook_loader
         loader = get_playbook_loader()
         playbook_count = len(loader.get_all_playbooks())
     except Exception:

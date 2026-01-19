@@ -5,6 +5,7 @@ Handles production deployment of validated remediation playbooks
 after human approval has been granted.
 """
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -156,7 +157,7 @@ class DeployerAgent:
         )
         
         # Validate the code can at least be parsed
-        code = self._prepare_code(playbook.remediation_code, token_mapping)
+        code = self._prepare_code(playbook.remediation_code, token_mapping, use_localstack=False)
         
         try:
             compile(code, "<playbook>", "exec")
@@ -195,11 +196,19 @@ class DeployerAgent:
             _audit=True,
         )
         
-        # Prepare code with token substitution
-        code = self._prepare_code(playbook.remediation_code, token_mapping)
-        
         # Get AWS config for production (uses LocalStack PROD in dev mode)
         aws_config = settings.get_aws_config("production")
+        
+        # Get endpoint URL if using LocalStack
+        endpoint_url = aws_config.get("endpoint_url")
+        
+        # Prepare code with token substitution
+        # Add AWS_ENDPOINT_URL to token mapping for LocalStack PROD
+        token_mapping_with_endpoint = token_mapping.copy()
+        if endpoint_url:
+            token_mapping_with_endpoint["AWS_ENDPOINT_URL"] = endpoint_url
+        
+        code = self._prepare_code(playbook.remediation_code, token_mapping_with_endpoint, use_localstack=bool(endpoint_url))
         
         # Create execution environment with production credentials
         session = boto3.Session(
@@ -207,9 +216,6 @@ class DeployerAgent:
             aws_secret_access_key=aws_config.get("aws_secret_access_key"),
             region_name=aws_config.get("region_name", self.aws_region),
         )
-        
-        # Get endpoint URL if using LocalStack
-        endpoint_url = aws_config.get("endpoint_url")
         
         namespace = {
             "boto3": boto3,
@@ -279,39 +285,31 @@ class DeployerAgent:
         self,
         code: str,
         token_mapping: dict[str, str],
+        use_localstack: bool = False,
     ) -> str:
         """Substitute tokens in code with actual values."""
         result = code
         
-        # Substitute user tokens
+        # Substitute user tokens (including AWS_ENDPOINT_URL if provided)
         for token, value in token_mapping.items():
             result = result.replace(f"{{{{{token}}}}}", str(value))
         
-        # Remove LocalStack-specific endpoint overrides for production
-        # The code uses the default AWS endpoint
-        if "endpoint_url=" in result and "localstack" in result.lower():
-            log.warning(
-                "removing_localstack_endpoint",
-                message="Removing LocalStack endpoint for production deployment",
+        # If NOT using LocalStack (real AWS), remove endpoint_url parameters entirely
+        if not use_localstack and "endpoint_url=" in result:
+            log.info(
+                "removing_endpoint_for_real_aws",
+                message="Removing endpoint_url for real AWS deployment",
             )
-            # This is a simplified replacement - in production, 
-            # you'd want more robust handling
-            result = result.replace(
-                "endpoint_url='{{AWS_ENDPOINT_URL}}'",
-                ""
-            ).replace(
-                'endpoint_url="{{AWS_ENDPOINT_URL}}"',
-                ""
-            ).replace(
-                ", endpoint_url={{AWS_ENDPOINT_URL}}",
-                ""
-            )
+            # Remove endpoint_url parameter from boto3 client calls
+            # Match endpoint_url='...' or endpoint_url="..." with optional leading comma/space
+            result = re.sub(r",?\s*endpoint_url=['\"][^'\"]*['\"]", "", result)
         
         return result
     
     def _get_restricted_builtins(self) -> dict[str, Any]:
         """Get restricted set of Python builtins for code execution."""
         return {
+            "__import__": __import__,  # Needed for import statements in playbook code
             "print": print,
             "dict": dict,
             "list": list,

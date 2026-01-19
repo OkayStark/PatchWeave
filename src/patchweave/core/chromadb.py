@@ -119,14 +119,21 @@ class PlaybookStore:
         # Build document text for embedding
         document = self._playbook_to_document(playbook)
         
-        # Build metadata for filtering
+        # Build metadata for filtering AND storing code
+        # Note: ChromaDB metadata values must be strings, ints, floats, or bools
         metadata = {
             "name": playbook.name,
+            "description": playbook.description,
             "vulnerability_type": playbook.vulnerability_type.value,
             "cloud_provider": playbook.cloud_provider.value,
             "resource_type": playbook.resource_type,
             "severity": playbook.severity.value,
             "version": playbook.version,
+            "search_text": playbook.search_text,
+            # Store the code fields - these are essential for validation!
+            "remediation_code": playbook.remediation_code,
+            "pre_check_code": playbook.pre_check_code,
+            "post_check_code": playbook.post_check_code,
         }
         
         # Add to collection
@@ -163,11 +170,17 @@ class PlaybookStore:
         metadatas = [
             {
                 "name": p.name,
+                "description": p.description,
                 "vulnerability_type": p.vulnerability_type.value,
                 "cloud_provider": p.cloud_provider.value,
                 "resource_type": p.resource_type,
                 "severity": p.severity.value,
                 "version": p.version,
+                "search_text": p.search_text,
+                # Store the code fields - these are essential for validation!
+                "remediation_code": p.remediation_code,
+                "pre_check_code": p.pre_check_code,
+                "post_check_code": p.post_check_code,
             }
             for p in playbooks
         ]

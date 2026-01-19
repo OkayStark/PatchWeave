@@ -39,21 +39,20 @@ class JiraClient:
     """
 
     # Mapping from JiraStatus enum to Jira transition/status names
-    # Updated for simple Jira workflow (Open -> Approved -> Done)
-    # PatchWeave will look for these status names in available transitions
+    # Updated for full Jira workflow with all statuses
     STATUS_TRANSITIONS: dict[JiraStatus, str] = {
-        JiraStatus.ANALYZING: "Open",          # Keep in Open during analysis
-        JiraStatus.PLAYBOOK_SEARCH: "Open",    # Keep in Open during search
-        JiraStatus.VERIFYING: "Open",          # Keep in Open during verification
-        JiraStatus.NO_PLAYBOOK: "Done",        # Move to Done if no playbook
-        JiraStatus.VALIDATING: "Open",         # Keep in Open during validation
-        JiraStatus.VALIDATION_FAILED: "Done",  # Move to Done on validation failure
-        JiraStatus.PENDING_APPROVAL: "Open",   # Keep in Open, waiting for manual change to Approved
-        JiraStatus.APPROVED: "Approved",       # Human sets this
-        JiraStatus.REJECTED: "Done",           # Move to Done on rejection
-        JiraStatus.DEPLOYING: "Approved",      # Keep in Approved during deployment
-        JiraStatus.DEPLOYMENT_FAILED: "Done",  # Move to Done on failure
-        JiraStatus.RESOLVED: "Done",           # Move to Done on success
+        JiraStatus.ANALYZING: "Analyzing",          # During AI analysis
+        JiraStatus.PLAYBOOK_SEARCH: "Matching",     # During playbook matching
+        JiraStatus.VERIFYING: "Matching",           # During verification
+        JiraStatus.NO_PLAYBOOK: "Done",             # Move to Done if no playbook
+        JiraStatus.VALIDATING: "Validating",        # During terraform validation
+        JiraStatus.VALIDATION_FAILED: "Done",       # Move to Done on validation failure
+        JiraStatus.PENDING_APPROVAL: "Pending Approval",  # Waiting for human approval
+        JiraStatus.APPROVED: "Approved",            # Human sets this
+        JiraStatus.REJECTED: "Done",                # Move to Done on rejection
+        JiraStatus.DEPLOYING: "Deploying",          # During deployment
+        JiraStatus.DEPLOYMENT_FAILED: "Done",       # Move to Done on failure
+        JiraStatus.RESOLVED: "Done",                # Move to Done on success
     }
 
     def __init__(
