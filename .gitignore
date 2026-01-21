@@ -89,6 +89,8 @@ logs/
 
 # Local development data
 localstack_data/
+localstack_test_data/
+localstack_prod_data/
 chroma_data/
 terraform.tfstate
 terraform.tfstate.backup

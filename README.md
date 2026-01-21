@@ -52,11 +52,31 @@ PatchWeave is a production-grade security remediation system that automatically 
 
 - Python 3.11+
 - Docker and Docker Compose
-- AWS credentials (for production) or LocalStack (for development)
-- Jira API access
-- OpenAI API key
+- Terraform 1.0+
+- AWS CLI
+- Jira Cloud account with API token
+- Google Gemini API key (free tier available)
 
-### Installation
+### One-Command Setup
+
+\`\`\`bash
+# Clone the repository
+git clone https://github.com/yourorg/patchweave.git
+cd patchweave
+
+# Run the setup script (does everything!)
+./scripts/setup.sh
+\`\`\`
+
+The setup script will:
+1. ✅ Check all prerequisites
+2. ✅ Create Python virtual environment  
+3. ✅ Install all dependencies
+4. ✅ Create `.env` from template
+5. ✅ Start LocalStack (TEST + PROD) and ChromaDB
+6. ✅ Verify all services are healthy
+
+### Manual Installation
 
 \`\`\`bash
 # Clone the repository
@@ -68,16 +88,31 @@ python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install dependencies
-pip install -e ".[dev]"
+pip install -e .
 
-# Copy environment template
+# Copy environment template and configure
 cp .env.example .env
-# Edit .env with your configuration
+# Edit .env with your Jira and Gemini credentials
 
 # Start infrastructure services
-docker-compose up -d
+make docker-up
+
+# Verify services
+make docker-health
 
 # Run the application
+python -m patchweave
+\`\`\`
+
+### Required Credentials in .env
+
+| Variable | Description | How to Get |
+|----------|-------------|------------|
+| `JIRA_BASE_URL` | Your Jira URL | `https://yourcompany.atlassian.net/` |
+| `JIRA_EMAIL` | Your Jira email | Your login email |
+| `JIRA_API_TOKEN` | Jira API token | [Create here](https://id.atlassian.com/manage-profile/security/api-tokens) |
+| `JIRA_PROJECT_KEY` | Project key | e.g., `SEC`, `KAN` |
+| `GOOGLE_API_KEY` | Gemini API key | [Get free key](https://aistudio.google.com/apikey) |
 python -m patchweave
 \`\`\`
 

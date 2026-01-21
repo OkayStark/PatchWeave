@@ -79,7 +79,7 @@ test-cov:
 # =============================================================================
 
 docker-up:
-	docker-compose up -d localstack chromadb
+	docker-compose up -d localstack-test localstack-prod chromadb
 	@echo "Waiting for services to start..."
 	@sleep 5
 
@@ -90,15 +90,18 @@ docker-logs:
 	docker-compose logs -f
 
 docker-health:
-	@echo "Checking LocalStack health..."
-	@curl -s http://localhost:4566/_localstack/health | python -m json.tool || echo "LocalStack not ready"
+	@echo "Checking LocalStack TEST (4566) health..."
+	@curl -s http://localhost:4566/_localstack/health | python -m json.tool || echo "LocalStack TEST not ready"
+	@echo ""
+	@echo "Checking LocalStack PROD (4567) health..."
+	@curl -s http://localhost:4567/_localstack/health | python -m json.tool || echo "LocalStack PROD not ready"
 	@echo ""
 	@echo "Checking ChromaDB health..."
 	@curl -s http://localhost:8000/api/v1/heartbeat | python -m json.tool || echo "ChromaDB not ready"
 
 docker-clean:
 	docker-compose down -v
-	rm -rf localstack_data chroma_data
+	rm -rf localstack_test_data localstack_prod_data chroma_data
 
 # =============================================================================
 # Application

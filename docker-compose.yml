@@ -2,14 +2,13 @@ version: '3.8'
 
 services:
   # ============================================================================
-  # LocalStack - AWS Simulation
+  # LocalStack TEST - Validation Environment (port 4566)
   # ============================================================================
-  localstack:
+  localstack-test:
     image: localstack/localstack:3.0
-    container_name: patchweave-localstack
+    container_name: localstack-test
     ports:
       - "4566:4566"            # LocalStack gateway (all services)
-      - "4510-4559:4510-4559"  # External services port range
     environment:
       - SERVICES=s3,ec2,rds,iam,cloudtrail,logs,sts,kms,vpc
       - DEBUG=1
@@ -17,7 +16,33 @@ services:
       - DOCKER_HOST=unix:///var/run/docker.sock
       - LOCALSTACK_HOST=localhost
     volumes:
-      - "./localstack_data:/var/lib/localstack"
+      - "./localstack_test_data:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - patchweave-network
+
+  # ============================================================================
+  # LocalStack PROD - Production Simulation Environment (port 4567)
+  # ============================================================================
+  localstack-prod:
+    image: localstack/localstack:3.0
+    container_name: localstack-prod
+    ports:
+      - "4567:4566"            # Mapped to 4567 externally
+    environment:
+      - SERVICES=s3,ec2,rds,iam,cloudtrail,logs,sts,kms,vpc
+      - DEBUG=1
+      - PERSISTENCE=1
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - LOCALSTACK_HOST=localhost
+    volumes:
+      - "./localstack_prod_data:/var/lib/localstack"
       - "/var/run/docker.sock:/var/run/docker.sock"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
@@ -89,7 +114,9 @@ networks:
     name: patchweave-network
 
 volumes:
-  localstack_data:
+  localstack_test_data:
+    driver: local
+  localstack_prod_data:
     driver: local
   chroma_data:
     driver: local
