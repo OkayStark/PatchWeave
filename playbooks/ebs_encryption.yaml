@@ -114,9 +114,10 @@ post_check_code: |
   import boto3
   
   def post_check(volume_id: str, new_volume_id: str = None, **kwargs) -> dict:
-      """Verify the new encrypted volume exists."""
+      """Verify that an encrypted volume was created from the original."""
       ec2 = boto3.client('ec2', endpoint_url='{{AWS_ENDPOINT_URL}}')
       
+      # If new_volume_id is provided, check it directly
       if new_volume_id:
           response = ec2.describe_volumes(VolumeIds=[new_volume_id])
           if response['Volumes']:
@@ -127,4 +128,22 @@ post_check_code: |
                   "state": volume.get('State')
               }
       
-      return {"verified": False, "note": "New volume ID required for verification"}
+      # Otherwise, find encrypted volumes created by PatchWeave
+      response = ec2.describe_volumes(
+          Filters=[
+              {'Name': 'encrypted', 'Values': ['true']},
+              {'Name': 'tag:CreatedBy', 'Values': ['PatchWeave']}
+          ]
+      )
+      
+      if response['Volumes']:
+          # Found at least one encrypted volume created by PatchWeave
+          encrypted_volume = response['Volumes'][0]
+          return {
+              "verified": True,
+              "new_volume_encrypted": True,
+              "new_volume_id": encrypted_volume['VolumeId'],
+              "state": encrypted_volume.get('State')
+          }
+      
+      return {"verified": False, "note": "No encrypted PatchWeave volume found"}

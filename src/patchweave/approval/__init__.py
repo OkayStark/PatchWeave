@@ -33,7 +33,7 @@ class ApprovalDecision(str, Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     PENDING = "pending"
-    TIMEOUT = "timeout"
+    # Note: No TIMEOUT - approvals wait indefinitely per design
 
 
 class ApprovalError(Exception):
@@ -57,7 +57,6 @@ class ApprovalHandler:
         self,
         jira_client: JiraClient | None = None,
         poll_interval_seconds: int = 30,
-        approval_timeout_hours: int = 24,
     ):
         """
         Initialize the approval handler.
@@ -65,11 +64,12 @@ class ApprovalHandler:
         Args:
             jira_client: Jira client for API calls
             poll_interval_seconds: How often to poll for status changes
-            approval_timeout_hours: Max time to wait for approval
+            
+        Note: Approvals wait indefinitely - no timeout. Pending approvals
+        are tracked and polled continuously until approved or rejected.
         """
         self.jira_client = jira_client or JiraClient()
         self.poll_interval = poll_interval_seconds
-        self.timeout_hours = approval_timeout_hours
         
         # Callbacks for approval events
         self._on_approved: Callable[[WorkflowState], None] | None = None
@@ -78,7 +78,6 @@ class ApprovalHandler:
         log.info(
             "approval_handler_initialized",
             poll_interval=self.poll_interval,
-            timeout_hours=self.timeout_hours,
         )
     
     def request_approval(
@@ -302,12 +301,7 @@ _Validation completed at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_
         elif jira_status in ("REJECTED", "CANCELLED", "CLOSED"):
             return ApprovalDecision.REJECTED
         else:
-            # Check for timeout
-            if state.approval_requested_at:
-                elapsed = datetime.utcnow() - state.approval_requested_at
-                if elapsed.total_seconds() > self.timeout_hours * 3600:
-                    return ApprovalDecision.TIMEOUT
-            
+            # No timeout - wait indefinitely for approval
             return ApprovalDecision.PENDING
     
     def process_approval(
@@ -420,53 +414,7 @@ _Validation completed at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_
         
         return "No reason provided"
     
-    def process_timeout(
-        self,
-        state: WorkflowState,
-    ) -> WorkflowState:
-        """
-        Process an approval timeout.
-        
-        Args:
-            state: Current workflow state
-            
-        Returns:
-            Updated workflow state
-        """
-        log.warning(
-            "approval_timeout",
-            workflow_id=state.workflow_id,
-            jira_ticket_id=state.jira_ticket_id,
-            timeout_hours=self.timeout_hours,
-            _audit=True,
-        )
-        
-        state.phase = WorkflowPhase.FAILED
-        state.add_event(
-            "approval_timeout",
-            {
-                "timeout_hours": self.timeout_hours,
-            },
-        )
-        
-        # Post timeout notification to Jira
-        comment = f"""
-h2. ⏰ Approval Timeout
-
-This remediation request has not received approval within {self.timeout_hours} hours.
-
-The workflow has been closed. If approval is still needed, please:
-1. Manually trigger a new analysis
-2. Or re-open this ticket for processing
-
-_PatchWeave Workflow ID: {state.workflow_id}_
-"""
-        self.jira_client.add_comment(
-            ticket_id=state.jira_ticket_id,
-            comment=comment,
-        )
-        
-        return state
+    # Note: No process_timeout method - approvals wait indefinitely per design
     
     def register_approval_callback(
         self,

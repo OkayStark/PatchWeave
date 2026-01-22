@@ -38,16 +38,31 @@ pre_check_code: |
       
       try:
           response = s3.get_bucket_encryption(Bucket=bucket_name)
-          rules = response.get('ServerSideEncryptionConfiguration', {}).get('Rules', [])
+          config = response.get('ServerSideEncryptionConfiguration', {})
+          rules = config.get('Rules', [])
           
-          if rules:
-              return {
-                  "needs_remediation": False,
-                  "current_state": "encrypted",
-                  "encryption_type": rules[0].get('ApplyServerSideEncryptionByDefault', {}).get('SSEAlgorithm', 'unknown')
-              }
+          # Check if encryption is actually configured
+          # LocalStack returns empty {} after encryption is deleted
+          if rules and len(rules) > 0:
+              rule = rules[0]
+              default_encryption = rule.get('ApplyServerSideEncryptionByDefault', {})
+              if default_encryption.get('SSEAlgorithm'):
+                  return {
+                      "needs_remediation": False,
+                      "current_state": "encrypted",
+                      "encryption_type": default_encryption.get('SSEAlgorithm', 'unknown')
+                  }
+          
+          # Empty rules or no SSEAlgorithm means not properly encrypted
+          return {
+              "needs_remediation": True,
+              "current_state": "unencrypted",
+              "message": "No encryption configuration found"
+          }
+          
       except ClientError as e:
-          if e.response['Error']['Code'] == 'ServerSideEncryptionConfigurationNotFoundError':
+          error_code = e.response['Error']['Code']
+          if error_code in ['ServerSideEncryptionConfigurationNotFoundError', 'NoSuchBucketEncryption']:
               return {
                   "needs_remediation": True,
                   "current_state": "unencrypted",

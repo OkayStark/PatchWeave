@@ -39,20 +39,19 @@ class JiraClient:
     """
 
     # Mapping from JiraStatus enum to Jira transition/status names
-    # Updated for full Jira workflow with all statuses
+    # 10 states: 5 active + 5 terminal
     STATUS_TRANSITIONS: dict[JiraStatus, str] = {
-        JiraStatus.ANALYZING: "Analyzing",          # During AI analysis
-        JiraStatus.PLAYBOOK_SEARCH: "Matching",     # During playbook matching
-        JiraStatus.VERIFYING: "Matching",           # During verification
-        JiraStatus.NO_PLAYBOOK: "Done",             # Move to Done if no playbook
+        # Active states
+        JiraStatus.ANALYZING: "Analyzing",          # During AI analysis + playbook matching
         JiraStatus.VALIDATING: "Validating",        # During terraform validation
-        JiraStatus.VALIDATION_FAILED: "Done",       # Move to Done on validation failure
         JiraStatus.PENDING_APPROVAL: "Pending Approval",  # Waiting for human approval
-        JiraStatus.APPROVED: "Approved",            # Human sets this
-        JiraStatus.REJECTED: "Done",                # Move to Done on rejection
         JiraStatus.DEPLOYING: "Deploying",          # During deployment
-        JiraStatus.DEPLOYMENT_FAILED: "Done",       # Move to Done on failure
+        # Terminal states
         JiraStatus.RESOLVED: "Done",                # Move to Done on success
+        JiraStatus.REJECTED: "Done",                # Move to Done on rejection
+        JiraStatus.NO_PLAYBOOK: "Done",             # Move to Done if no playbook
+        JiraStatus.VALIDATION_FAILED: "Done",       # Move to Done on validation failure
+        JiraStatus.DEPLOYMENT_FAILED: "Done",       # Move to Done on failure
     }
 
     def __init__(

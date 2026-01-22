@@ -316,10 +316,14 @@ class PlaybookStore:
             include=["documents", "metadatas"],
         )
         
-        if not results["ids"]:
+        if not results["ids"] or len(results["ids"]) == 0:
             return None
+        
+        # Safely access metadata with bounds check
+        metadata = {}
+        if results.get("metadatas") and len(results["metadatas"]) > 0:
+            metadata = results["metadatas"][0]
             
-        metadata = results["metadatas"][0] if results["metadatas"] else {}
         return self._metadata_to_playbook(results["ids"][0], metadata)
 
     def get_statistics(self) -> dict[str, Any]:

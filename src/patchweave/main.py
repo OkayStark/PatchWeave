@@ -11,11 +11,16 @@ Main application that orchestrates the full remediation pipeline:
 """
 
 import asyncio
+import shutil
 import signal
+import subprocess
 import sys
+import threading
+from collections import deque
 from datetime import datetime
 from typing import Any, NoReturn
 
+import requests
 import uvicorn
 
 from patchweave.config import settings
@@ -24,6 +29,341 @@ from patchweave.logging import setup_logging, get_logger
 # Initialize logging first
 setup_logging()
 log = get_logger(__name__)
+
+
+# =============================================================================
+# RESOURCE LOCK MANAGER
+# =============================================================================
+
+class ResourceLockManager:
+    """
+    Manages resource locks to prevent concurrent processing of the same AWS resource.
+    
+    Uses FIFO queue for fair ordering when multiple tickets target the same resource.
+    """
+    
+    def __init__(self):
+        self._locks: dict[str, str] = {}  # resource_arn -> ticket_id
+        self._wait_queues: dict[str, deque[str]] = {}  # resource_arn -> deque of ticket_ids
+        self._lock = threading.Lock()
+    
+    def acquire(self, resource_arn: str, ticket_id: str) -> bool:
+        """
+        Try to acquire lock for a resource.
+        
+        Returns True if lock acquired, False if need to wait.
+        """
+        with self._lock:
+            if resource_arn not in self._locks:
+                # No one has the lock, acquire it
+                self._locks[resource_arn] = ticket_id
+                log.info(
+                    "lock_acquired",
+                    resource_arn=resource_arn,
+                    ticket_id=ticket_id,
+                )
+                return True
+            elif self._locks[resource_arn] == ticket_id:
+                # We already have the lock
+                return True
+            else:
+                # Someone else has the lock, add to wait queue
+                if resource_arn not in self._wait_queues:
+                    self._wait_queues[resource_arn] = deque()
+                if ticket_id not in self._wait_queues[resource_arn]:
+                    self._wait_queues[resource_arn].append(ticket_id)
+                    log.info(
+                        "lock_queued",
+                        resource_arn=resource_arn,
+                        ticket_id=ticket_id,
+                        holder=self._locks[resource_arn],
+                        queue_position=len(self._wait_queues[resource_arn]),
+                    )
+                return False
+    
+    def release(self, resource_arn: str, ticket_id: str) -> str | None:
+        """
+        Release lock for a resource.
+        
+        Returns the next ticket_id in queue (if any) that should be notified.
+        """
+        with self._lock:
+            if resource_arn in self._locks and self._locks[resource_arn] == ticket_id:
+                del self._locks[resource_arn]
+                log.info(
+                    "lock_released",
+                    resource_arn=resource_arn,
+                    ticket_id=ticket_id,
+                )
+                
+                # Check if someone is waiting
+                if resource_arn in self._wait_queues and self._wait_queues[resource_arn]:
+                    next_ticket = self._wait_queues[resource_arn].popleft()
+                    self._locks[resource_arn] = next_ticket
+                    log.info(
+                        "lock_granted_to_next",
+                        resource_arn=resource_arn,
+                        ticket_id=next_ticket,
+                    )
+                    return next_ticket
+                    
+                # Clean up empty queue
+                if resource_arn in self._wait_queues and not self._wait_queues[resource_arn]:
+                    del self._wait_queues[resource_arn]
+            
+            return None
+    
+    def is_locked(self, resource_arn: str) -> bool:
+        """Check if a resource is currently locked."""
+        with self._lock:
+            return resource_arn in self._locks
+    
+    def get_holder(self, resource_arn: str) -> str | None:
+        """Get the ticket_id that holds the lock."""
+        with self._lock:
+            return self._locks.get(resource_arn)
+    
+    def get_queue_position(self, resource_arn: str, ticket_id: str) -> int:
+        """Get position in wait queue (0 if not waiting, 1+ if waiting)."""
+        with self._lock:
+            if resource_arn in self._wait_queues:
+                try:
+                    return list(self._wait_queues[resource_arn]).index(ticket_id) + 1
+                except ValueError:
+                    return 0
+            return 0
+    
+    @property
+    def active_locks(self) -> int:
+        """Number of currently held locks."""
+        with self._lock:
+            return len(self._locks)
+
+
+# Global lock manager instance
+_resource_lock_manager: ResourceLockManager | None = None
+
+
+def get_resource_lock_manager() -> ResourceLockManager:
+    """Get or create the global resource lock manager."""
+    global _resource_lock_manager
+    if _resource_lock_manager is None:
+        _resource_lock_manager = ResourceLockManager()
+    return _resource_lock_manager
+
+
+# =============================================================================
+# PREFLIGHT CHECKS
+# =============================================================================
+
+class PreflightCheckError(Exception):
+    """Raised when a critical preflight check fails."""
+    pass
+
+
+class PreflightChecker:
+    """
+    Performs startup pre-flight checks to ensure all dependencies are available.
+    
+    Critical checks (block startup):
+    - Jira connectivity
+    - ChromaDB connectivity
+    - LocalStack TEST container
+    - LocalStack PROD container
+    - Playbooks loaded
+    - Sufficient disk space
+    
+    Warning checks (allow startup):
+    - LLM availability
+    """
+    
+    MINIMUM_DISK_SPACE_MB = 500  # Minimum free disk space for Terraform temp dirs
+    
+    def __init__(self):
+        self.results: dict[str, dict[str, Any]] = {}
+        self.warnings: list[str] = []
+        self.llm_available = False
+    
+    def run_all_checks(self) -> bool:
+        """
+        Run all preflight checks.
+        
+        Returns True if all critical checks pass, False otherwise.
+        Raises PreflightCheckError with details if critical check fails.
+        """
+        log.info("preflight_checks_starting")
+        
+        # Critical checks
+        critical_checks = [
+            ("Jira Connectivity", self._check_jira),
+            ("ChromaDB Connectivity", self._check_chromadb),
+            ("LocalStack TEST", self._check_localstack_test),
+            ("LocalStack PROD", self._check_localstack_prod),
+            ("Playbooks", self._check_playbooks),
+            ("Disk Space", self._check_disk_space),
+        ]
+        
+        for name, check_func in critical_checks:
+            try:
+                success, message = check_func()
+                self.results[name] = {"success": success, "message": message}
+                
+                if success:
+                    log.info(f"preflight_check_passed", check=name, message=message)
+                else:
+                    log.error(f"preflight_check_failed", check=name, message=message)
+                    raise PreflightCheckError(f"❌ {name}: {message}")
+                    
+            except PreflightCheckError:
+                raise
+            except Exception as e:
+                log.error(f"preflight_check_error", check=name, error=str(e))
+                raise PreflightCheckError(f"❌ {name}: {str(e)}")
+        
+        # Warning check (LLM)
+        try:
+            success, message = self._check_llm()
+            self.results["LLM Availability"] = {"success": success, "message": message}
+            self.llm_available = success
+            
+            if success:
+                log.info("preflight_check_passed", check="LLM Availability", message=message)
+            else:
+                log.warning("preflight_check_warning", check="LLM Availability", message=message)
+                self.warnings.append(f"⚠️ LLM Unavailable: {message}. Human playbook selection will be required.")
+                
+        except Exception as e:
+            log.warning("preflight_check_warning", check="LLM Availability", error=str(e))
+            self.warnings.append(f"⚠️ LLM check failed: {str(e)}. Human playbook selection will be required.")
+            self.llm_available = False
+        
+        log.info("preflight_checks_complete", passed=len([r for r in self.results.values() if r["success"]]))
+        return True
+    
+    def _check_jira(self) -> tuple[bool, str]:
+        """Check Jira connectivity."""
+        try:
+            from requests.auth import HTTPBasicAuth
+            auth = HTTPBasicAuth(settings.jira_email, settings.jira_api_token)
+            response = requests.get(
+                f"{settings.jira_base_url}rest/api/3/myself",
+                auth=auth,
+                timeout=10,
+            )
+            if response.status_code == 200:
+                return True, f"Connected to {settings.jira_base_url}"
+            else:
+                return False, f"HTTP {response.status_code}: {response.text[:100]}"
+        except requests.RequestException as e:
+            return False, f"Connection failed: {str(e)}"
+    
+    def _check_chromadb(self) -> tuple[bool, str]:
+        """Check ChromaDB connectivity."""
+        try:
+            # Try the newer API endpoint first, then fall back to older ones
+            for endpoint in ["/api/v2/heartbeat", "/api/v1/heartbeat", "/api/v1"]:
+                try:
+                    response = requests.get(
+                        f"http://{settings.chroma_host}:{settings.chroma_port}{endpoint}",
+                        timeout=5,
+                    )
+                    if response.status_code == 200:
+                        return True, f"Connected to {settings.chroma_host}:{settings.chroma_port}"
+                except requests.RequestException:
+                    continue
+            
+            # Try connecting via chromadb client directly
+            import chromadb
+            client = chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
+            client.heartbeat()  # Will raise if not connected
+            return True, f"Connected to {settings.chroma_host}:{settings.chroma_port}"
+        except Exception as e:
+            return False, f"Connection failed: {str(e)}"
+    
+    def _check_localstack_test(self) -> tuple[bool, str]:
+        """Check LocalStack TEST container."""
+        try:
+            response = requests.get(
+                f"{settings.localstack_test_endpoint}/_localstack/health",
+                timeout=5,
+            )
+            if response.status_code == 200:
+                return True, f"Running at {settings.localstack_test_endpoint}"
+            else:
+                return False, f"Unhealthy: HTTP {response.status_code}"
+        except requests.RequestException as e:
+            return False, f"Not reachable: {str(e)}. Run: docker-compose up localstack-test"
+    
+    def _check_localstack_prod(self) -> tuple[bool, str]:
+        """Check LocalStack PROD container."""
+        try:
+            response = requests.get(
+                f"{settings.localstack_prod_endpoint}/_localstack/health",
+                timeout=5,
+            )
+            if response.status_code == 200:
+                return True, f"Running at {settings.localstack_prod_endpoint}"
+            else:
+                return False, f"Unhealthy: HTTP {response.status_code}"
+        except requests.RequestException as e:
+            return False, f"Not reachable: {str(e)}. Run: docker-compose up localstack-prod"
+    
+    def _check_playbooks(self) -> tuple[bool, str]:
+        """Check if playbooks are available."""
+        try:
+            from patchweave.core.loader import get_playbook_loader
+            loader = get_playbook_loader()
+            playbooks = loader.load_all()
+            if playbooks and len(playbooks) > 0:
+                return True, f"{len(playbooks)} playbooks loaded"
+            else:
+                return False, "No playbooks found in playbooks directory"
+        except Exception as e:
+            return False, f"Failed to load playbooks: {str(e)}"
+    
+    def _check_disk_space(self) -> tuple[bool, str]:
+        """Check available disk space."""
+        try:
+            import os
+            stat = os.statvfs('/')
+            free_mb = (stat.f_bavail * stat.f_frsize) / (1024 * 1024)
+            if free_mb >= self.MINIMUM_DISK_SPACE_MB:
+                return True, f"{free_mb:.0f} MB available"
+            else:
+                return False, f"Only {free_mb:.0f} MB available, need {self.MINIMUM_DISK_SPACE_MB} MB"
+        except Exception as e:
+            return False, f"Could not check: {str(e)}"
+    
+    def _check_llm(self) -> tuple[bool, str]:
+        """Check LLM availability (warning only)."""
+        if not settings.use_llm:
+            return False, "LLM disabled in settings (USE_LLM=false)"
+        
+        # Check if at least one API key is configured
+        keys = [k for k in [settings.google_api_key, settings.google_api_key_2, settings.google_api_key_3] if k]
+        if not keys:
+            return False, "No API keys configured"
+        
+        # Optionally test API key validity (lightweight check)
+        # Skip actual API call to avoid rate limits during startup
+        return True, f"{len(keys)} API key(s) configured"
+    
+    def print_summary(self) -> None:
+        """Print a summary of all check results."""
+        print("\n" + "=" * 60)
+        print("PREFLIGHT CHECK RESULTS")
+        print("=" * 60)
+        
+        for name, result in self.results.items():
+            status = "✅" if result["success"] else "❌"
+            print(f"{status} {name}: {result['message']}")
+        
+        if self.warnings:
+            print("\n⚠️ WARNINGS:")
+            for warning in self.warnings:
+                print(f"  {warning}")
+        
+        print("=" * 60 + "\n")
 
 
 class PatchWeaveApp:
@@ -37,6 +377,13 @@ class PatchWeaveApp:
     - Approval status polling
     - Graceful shutdown handling
     """
+    
+    # Maximum description size (500KB as per design)
+    MAX_DESCRIPTION_SIZE = 500 * 1024  # 500KB in bytes
+    
+    # LLM retry settings
+    LLM_WAIT_INTERVAL_SECONDS = 30  # Check every 30s during wait
+    LLM_MAX_WAIT_MINUTES = 10  # Max wait before fallback to human selection
 
     def __init__(self) -> None:
         self._running = False
@@ -54,9 +401,17 @@ class PatchWeaveApp:
         self._validator = None
         self._deployer = None
         
+        # Resource lock manager
+        self._lock_manager = get_resource_lock_manager()
+        
+        # LLM availability tracking
+        self._llm_available = True
+        self._llm_exhausted_since: datetime | None = None
+        
         # Tracking
         self._pending_approvals: dict[str, Any] = {}
         self._processed_tickets: set[str] = set()
+        self._waiting_for_lock: dict[str, str] = {}  # ticket_id -> resource_arn
     
     def _init_components(self) -> None:
         """Initialize all application components."""
@@ -83,13 +438,29 @@ class PatchWeaveApp:
         self._deployer = DeployerAgent(dry_run=settings.deployment_dry_run)
 
     async def startup(self) -> None:
-        """Initialize all application components."""
+        """
+        Initialize all application components.
+        
+        Runs preflight checks before initializing - will exit if critical checks fail.
+        """
         log.info(
             "starting_patchweave",
             version="1.0.0",
             environment=settings.patchweave_env,
             use_localstack=settings.use_localstack,
         )
+        
+        # Run preflight checks FIRST
+        preflight = PreflightChecker()
+        try:
+            preflight.run_all_checks()
+            preflight.print_summary()
+            self._llm_available = preflight.llm_available
+        except PreflightCheckError as e:
+            log.critical("preflight_check_failed", error=str(e))
+            preflight.print_summary()
+            print(f"\n❌ STARTUP ABORTED: {e}\n")
+            sys.exit(1)
         
         # Initialize components
         self._init_components()
@@ -104,13 +475,13 @@ class PatchWeaveApp:
             moderate_confidence_threshold=settings.moderate_confidence_threshold,
             deployment_dry_run=settings.deployment_dry_run,
             use_llm=settings.use_llm,
+            llm_available=self._llm_available,
         )
         
-        # Load playbooks and index them into ChromaDB
+        # Index playbooks into ChromaDB for semantic search
+        # (playbooks already loaded during preflight checks, reuse them)
         try:
             playbooks = self._playbook_loader.load_all()
-            log.info("playbooks_loaded", count=len(playbooks))
-            
             # Index playbooks into ChromaDB for semantic search
             if playbooks:
                 from patchweave.core.chromadb import get_playbook_store
@@ -330,8 +701,243 @@ class PatchWeaveApp:
             analysis_confidence=0.5,  # Lower confidence since no LLM analysis
         )
     
+    async def _analyze_with_llm_fallback(self, raw_finding: Any) -> tuple[Any, bool]:
+        """
+        Analyze finding with LLM, with exhaustion handling.
+        
+        If all API keys are exhausted:
+        1. Wait up to 10 minutes with 30-second interval checks
+        2. If still unavailable, fall back to non-LLM analysis
+        
+        Returns:
+            Tuple of (AnalyzedFinding, llm_exhausted: bool)
+        """
+        ticket_id = raw_finding.jira_ticket_id
+        llm_exhausted = False
+        
+        # Check if we're already in an LLM exhaustion state
+        if self._llm_exhausted_since is not None:
+            wait_time = (datetime.utcnow() - self._llm_exhausted_since).total_seconds()
+            if wait_time < self.LLM_MAX_WAIT_MINUTES * 60:
+                # Still in wait period
+                remaining = self.LLM_MAX_WAIT_MINUTES * 60 - wait_time
+                log.info(
+                    "llm_exhausted_waiting",
+                    ticket_id=ticket_id,
+                    remaining_seconds=remaining,
+                )
+        
+        # Try to analyze with LLM
+        try:
+            analyzed_finding = await self._analyzer.analyze(raw_finding)
+            
+            # Success - reset exhaustion state
+            if self._llm_exhausted_since is not None:
+                log.info("llm_recovered", ticket_id=ticket_id)
+                self._llm_exhausted_since = None
+                self._llm_available = True
+            
+            return analyzed_finding, False
+            
+        except Exception as e:
+            error_str = str(e).lower()
+            
+            # Check if this is an API key exhaustion error (rate limit, quota exceeded)
+            is_exhaustion = any(x in error_str for x in [
+                "rate limit", "quota", "exceeded", "429", "insufficient_quota",
+                "api key", "all keys exhausted"
+            ])
+            
+            if not is_exhaustion:
+                # Regular error - re-raise
+                raise
+            
+            # API key exhaustion - start waiting period
+            if self._llm_exhausted_since is None:
+                self._llm_exhausted_since = datetime.utcnow()
+                self._llm_available = False
+                log.warning(
+                    "llm_exhausted_starting_wait",
+                    ticket_id=ticket_id,
+                    max_wait_minutes=self.LLM_MAX_WAIT_MINUTES,
+                )
+            
+            # Wait with interval checks
+            wait_start = datetime.utcnow()
+            while (datetime.utcnow() - wait_start).total_seconds() < self.LLM_MAX_WAIT_MINUTES * 60:
+                await asyncio.sleep(self.LLM_WAIT_INTERVAL_SECONDS)
+                
+                # Try again
+                try:
+                    analyzed_finding = await self._analyzer.analyze(raw_finding)
+                    
+                    # Success - reset exhaustion state
+                    log.info("llm_recovered_during_wait", ticket_id=ticket_id)
+                    self._llm_exhausted_since = None
+                    self._llm_available = True
+                    return analyzed_finding, False
+                    
+                except Exception as retry_error:
+                    retry_error_str = str(retry_error).lower()
+                    if not any(x in retry_error_str for x in [
+                        "rate limit", "quota", "exceeded", "429", "insufficient_quota"
+                    ]):
+                        # Different error - re-raise
+                        raise
+                    
+                    # Still exhausted - continue waiting
+                    elapsed = (datetime.utcnow() - wait_start).total_seconds()
+                    remaining = self.LLM_MAX_WAIT_MINUTES * 60 - elapsed
+                    log.info(
+                        "llm_still_exhausted",
+                        ticket_id=ticket_id,
+                        remaining_seconds=remaining,
+                    )
+            
+            # Timeout reached - fall back to non-LLM analysis
+            log.warning(
+                "llm_exhausted_timeout_fallback",
+                ticket_id=ticket_id,
+                wait_minutes=self.LLM_MAX_WAIT_MINUTES,
+            )
+            
+            analyzed_finding = await self._create_finding_without_llm(raw_finding)
+            return analyzed_finding, True  # Mark as LLM exhausted
+    
+    async def _request_human_playbook_selection(
+        self,
+        state: Any,
+        finding: Any,
+        match_result: Any,
+    ) -> Any:
+        """
+        Request human selection from top-3 playbooks when LLM is exhausted
+        and confidence is moderate (70-89%).
+        
+        Posts to Jira with the top-3 matched playbooks for human selection.
+        """
+        ticket_id = state.jira_ticket_id
+        
+        # Get top 3 playbooks from matcher
+        top_playbooks = self._playbook_matcher.get_top_matches(finding, n=3)
+        
+        if not top_playbooks:
+            log.warning(
+                "human_selection_no_playbooks",
+                ticket_id=ticket_id,
+            )
+            state.human_selection_pending = False
+            return state
+        
+        # Format playbook options for Jira comment
+        playbook_options = []
+        for i, (playbook, similarity) in enumerate(top_playbooks, 1):
+            playbook_options.append(
+                f"{i}. **{playbook.name}** (ID: `{playbook.id}`)\n"
+                f"   - Similarity: {similarity:.1%}\n"
+                f"   - Description: {playbook.description[:200]}..."
+            )
+        
+        comment = (
+            "⚠️ **Human Playbook Selection Required**\n\n"
+            "The LLM is currently unavailable and the automatic match confidence is moderate. "
+            "Please select one of the following playbooks or reject if none are appropriate:\n\n"
+            f"{chr(10).join(playbook_options)}\n\n"
+            "**To select a playbook**, reply with:\n"
+            "`PATCHWEAVE:SELECT:<playbook_id>`\n\n"
+            "**To reject all options**, reply with:\n"
+            "`PATCHWEAVE:REJECT`"
+        )
+        
+        self._jira_client.add_comment(ticket_id, comment)
+        
+        log.info(
+            "human_selection_requested",
+            ticket_id=ticket_id,
+            playbook_count=len(top_playbooks),
+        )
+        
+        # Store the top playbooks in state for later resolution
+        state.pending_playbook_options = top_playbooks
+        state.human_selection_pending = True
+        state.add_event("human_selection_requested", {
+            "playbook_ids": [p.id for p, _ in top_playbooks],
+        })
+        
+        return state
+    
     async def _run_remediation_workflow(self, raw_finding: Any) -> Any:
         """Run the complete remediation workflow for a finding."""
+        from patchweave.agents.state import WorkflowPhase, WorkflowState
+        from patchweave.models.finding import RawFinding, AnalyzedFinding
+        from patchweave.core.matcher import MatchTier
+        from patchweave.models.enums import VulnerabilityType, Severity, CloudProvider
+        import uuid
+        
+        ticket_id = raw_finding.jira_ticket_id
+        resource_arn = getattr(raw_finding, 'resource_arn', None) or ticket_id  # Fallback to ticket_id if no ARN
+        
+        # Check description size and truncate if needed (500KB limit)
+        description = raw_finding.description or ""
+        if len(description.encode('utf-8')) > self.MAX_DESCRIPTION_SIZE:
+            log.warning(
+                "description_truncated",
+                ticket_id=ticket_id,
+                original_size=len(description.encode('utf-8')),
+                max_size=self.MAX_DESCRIPTION_SIZE,
+            )
+            # Truncate to 500KB
+            truncated_desc = description[:self.MAX_DESCRIPTION_SIZE // 2]  # Rough char estimate
+            while len(truncated_desc.encode('utf-8')) > self.MAX_DESCRIPTION_SIZE:
+                truncated_desc = truncated_desc[:-1000]
+            truncated_desc += "\n\n[... Description truncated due to size limit ...]"
+            raw_finding.description = truncated_desc
+            
+            # Update Jira with truncation notice
+            self._jira_client.add_comment(
+                ticket_id,
+                f"⚠️ Description was truncated from {len(description.encode('utf-8')):,} bytes to {len(truncated_desc.encode('utf-8')):,} bytes (500KB limit)."
+            )
+        
+        # Acquire resource lock (FIFO queue)
+        lock_acquired = False
+        try:
+            if self._lock_manager.is_locked(resource_arn):
+                log.info(
+                    "waiting_for_resource_lock",
+                    ticket_id=ticket_id,
+                    resource_arn=resource_arn,
+                )
+                self._waiting_for_lock[ticket_id] = resource_arn
+            
+            # Wait for lock with polling (non-blocking async wait)
+            while not self._lock_manager.acquire(resource_arn, ticket_id):
+                await asyncio.sleep(1)  # Poll every second
+            
+            lock_acquired = True
+            self._waiting_for_lock.pop(ticket_id, None)
+            
+            log.info(
+                "resource_lock_acquired",
+                ticket_id=ticket_id,
+                resource_arn=resource_arn,
+            )
+            
+            # Run the actual workflow with lock held
+            return await self._run_workflow_with_lock(raw_finding, resource_arn)
+            
+        finally:
+            # Always release lock on exit
+            if lock_acquired:
+                self._lock_manager.release(resource_arn, ticket_id)
+                log.info(
+                    "resource_lock_released",
+                    ticket_id=ticket_id,
+                    resource_arn=resource_arn,
+                )
+    
+    async def _run_workflow_with_lock(self, raw_finding: Any, resource_arn: str) -> Any:
+        """Run workflow after acquiring resource lock."""
         from patchweave.agents.state import WorkflowPhase, WorkflowState
         from patchweave.models.finding import RawFinding, AnalyzedFinding
         from patchweave.core.matcher import MatchTier
@@ -344,10 +950,11 @@ class PatchWeaveApp:
         from patchweave.models.enums import JiraStatus
         self._jira_client.update_status(ticket_id, JiraStatus.ANALYZING)
         
-        # Check if LLM is enabled
+        # Check if LLM is enabled and available
+        llm_exhausted = False
         if settings.use_llm:
-            # 1. Analyze the finding with AI
-            analyzed_finding = await self._analyzer.analyze(raw_finding)
+            # Check LLM availability with exhaustion handling
+            analyzed_finding, llm_exhausted = await self._analyze_with_llm_fallback(raw_finding)
         else:
             # LLM disabled - create AnalyzedFinding directly and match via ChromaDB
             log.info(
@@ -368,6 +975,7 @@ class PatchWeaveApp:
             jira_ticket_id=ticket_id,
             analyzed_finding=analyzed_finding,
         )
+        state.llm_exhausted = llm_exhausted  # Track if LLM was unavailable
         
         # Get token mapping from the token store (populated during analysis or _create_finding_without_llm)
         from patchweave.core.tokenizer import get_token_store
@@ -386,6 +994,8 @@ class PatchWeaveApp:
                 "finding_type": analyzed_finding.vulnerability_type.value,
                 "similarity": match_result.similarity,
             })
+            # Update Jira status to NO_PLAYBOOK
+            self._jira_client.update_status(ticket_id, JiraStatus.NO_PLAYBOOK)
             return state
         
         # 4. Update state with match info
@@ -402,7 +1012,27 @@ class PatchWeaveApp:
             state.add_event("confidence_too_low", {
                 "similarity": match_result.similarity
             })
+            # Update Jira status to NO_PLAYBOOK
+            self._jira_client.update_status(ticket_id, JiraStatus.NO_PLAYBOOK)
             return state
+        
+        # Handle moderate confidence with LLM exhaustion - need human selection
+        if route == "moderate_confidence" and llm_exhausted:
+            # LLM is unavailable and confidence is moderate - request human selection
+            state = await self._request_human_playbook_selection(
+                state=state,
+                finding=analyzed_finding,
+                match_result=match_result,
+            )
+            
+            # If human hasn't selected yet, we'll poll for it later
+            if state.human_selection_pending:
+                return state
+            
+            # Human selected a playbook - update the match
+            if state.human_selected_playbook:
+                playbook = state.human_selected_playbook
+                state.matched_playbook = playbook
         
         # 6. Validate in test environment (requires Terraform + LocalStack)
         import shutil
@@ -496,10 +1126,8 @@ class PatchWeaveApp:
             elif decision == ApprovalDecision.REJECTED:
                 state = self._approval_handler.process_rejection(state)
                 completed.append(ticket_id)
-                
-            elif decision == ApprovalDecision.TIMEOUT:
-                state = self._approval_handler.process_timeout(state)
-                completed.append(ticket_id)
+            
+            # Note: No TIMEOUT handling - approvals wait indefinitely per design
         
         # Remove completed from pending
         for ticket_id in completed:

@@ -12,27 +12,43 @@ class JiraStatus(str, Enum):
     """
     All possible Jira workflow statuses for findings.
 
-    These statuses represent the complete lifecycle of a security finding
+    These 10 statuses represent the complete lifecycle of a security finding
     from initial discovery through remediation.
+    
+    Active States (processing ongoing):
+    - OPEN: New finding awaiting processing
+    - ANALYZING: Being analyzed by LLM/matcher
+    - VALIDATING: Playbook being validated in LocalStack TEST
+    - PENDING_APPROVAL: Awaiting human approval
+    - DEPLOYING: Approved remediation being deployed
+    
+    Terminal States (end of processing):
+    - RESOLVED: Successfully remediated
+    - REJECTED: Human rejected the remediation
+    - NO_PLAYBOOK: No suitable playbook found (confidence < 70%)
+    - VALIDATION_FAILED: Playbook failed validation in TEST
+    - DEPLOYMENT_FAILED: Deployment to PROD failed
     """
 
+    # Active states
     OPEN = "OPEN"
     ANALYZING = "ANALYZING"
-    PLAYBOOK_SEARCH = "PLAYBOOK SEARCH"
-    VERIFYING = "VERIFYING"
-    NO_PLAYBOOK = "NO PLAYBOOK"
     VALIDATING = "VALIDATING"
-    VALIDATION_FAILED = "VALIDATION FAILED"
     PENDING_APPROVAL = "PENDING APPROVAL"
-    APPROVED = "APPROVED"
-    REJECTED = "REJECTED"
     DEPLOYING = "DEPLOYING"
-    DEPLOYMENT_FAILED = "DEPLOYMENT FAILED"
+    
+    # Terminal states (success)
     RESOLVED = "RESOLVED"
+    
+    # Terminal states (failure/rejection)
+    REJECTED = "REJECTED"
+    NO_PLAYBOOK = "NO PLAYBOOK"
+    VALIDATION_FAILED = "VALIDATION FAILED"
+    DEPLOYMENT_FAILED = "DEPLOYMENT FAILED"
 
     @classmethod
     def terminal_states(cls) -> set["JiraStatus"]:
-        """Return states that represent end of processing."""
+        """Return the 4 terminal states that represent end of processing."""
         return {
             cls.RESOLVED,
             cls.REJECTED,
@@ -43,15 +59,12 @@ class JiraStatus(str, Enum):
 
     @classmethod
     def active_states(cls) -> set["JiraStatus"]:
-        """Return states where processing is ongoing."""
+        """Return the 5 active states where processing is ongoing."""
         return {
             cls.OPEN,
             cls.ANALYZING,
-            cls.PLAYBOOK_SEARCH,
-            cls.VERIFYING,
             cls.VALIDATING,
             cls.PENDING_APPROVAL,
-            cls.APPROVED,
             cls.DEPLOYING,
         }
 
@@ -121,7 +134,7 @@ class Severity(str, Enum):
 
         Args:
             value: String value to convert
-
+0+
         Returns:
             Matching Severity or MEDIUM as default
         """

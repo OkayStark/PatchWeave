@@ -99,9 +99,17 @@ class Settings(BaseSettings):
         default="http://localhost:4566",
         description="LocalStack TEST endpoint URL (for validation)",
     )
+    localstack_test_container_name: str = Field(
+        default="localstack-test",
+        description="Docker container name for LocalStack TEST instance",
+    )
     localstack_prod_endpoint: str = Field(
         default="http://localhost:4567",
         description="LocalStack PROD endpoint URL (for remediation)",
+    )
+    localstack_prod_container_name: str = Field(
+        default="localstack-prod",
+        description="Docker container name for LocalStack PROD instance",
     )
     use_localstack: bool = Field(
         default=True,
@@ -199,6 +207,14 @@ class Settings(BaseSettings):
         default="./terraform",
         description="Directory containing Terraform templates",
     )
+    terraform_timeout_seconds: int = Field(
+        default=180,
+        description="Timeout in seconds for terraform commands",
+    )
+    terraform_output_truncate_length: int = Field(
+        default=500,
+        description="Max length for terraform error messages in logs",
+    )
 
     # -------------------------------------------------------------------------
     # Validators
@@ -289,9 +305,6 @@ class Settings(BaseSettings):
         """Get the ChromaDB URL."""
         return f"http://{self.chroma_host}:{self.chroma_port}"
 
-    def get_chroma_url(self) -> str:
-        """Get the ChromaDB URL."""
-        return f"http://{self.chroma_host}:{self.chroma_port}"
 
 
 @lru_cache()

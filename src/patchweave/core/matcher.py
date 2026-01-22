@@ -10,6 +10,7 @@ semantic similarity with three confidence tiers:
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from patchweave.config import settings
 from patchweave.core.chromadb import PlaybookStore, get_playbook_store
@@ -178,7 +179,17 @@ class PlaybookMatcher:
                 auto_remediate=False,
             )
         
-        # Best match
+        # Best match - verify results is not empty
+        if not results:
+            return MatchResult(
+                finding=finding,
+                playbook=None,
+                similarity=0.0,
+                tier=MatchTier.LOW,
+                requires_verification=False,
+                auto_remediate=False,
+            )
+        
         playbook, similarity = results[0]
         tier = self._determine_tier(similarity)
         
@@ -223,7 +234,7 @@ class PlaybookMatcher:
             vulnerability_type=finding.vulnerability_type.value,
         )
         
-        if results:
+        if results and len(results) > 0:
             playbook, similarity = results[0]
             tier = self._determine_tier(similarity)
             
@@ -252,6 +263,36 @@ class PlaybookMatcher:
             vulnerability_type=finding.vulnerability_type.value,
         )
         return self.match(finding)
+
+    def get_top_matches(self, finding: Finding, n: int = 3) -> list[tuple[Any, float]]:
+        """
+        Get the top N matching playbooks for a finding.
+        
+        Used for human selection when LLM is exhausted and confidence is moderate.
+        
+        Args:
+            finding: Security finding to match
+            n: Number of top matches to return
+            
+        Returns:
+            List of (Playbook, similarity_score) tuples
+        """
+        search_text = self._build_search_text(finding)
+        
+        log.debug(
+            "getting_top_matches",
+            finding_id=finding.finding_id,
+            n=n,
+        )
+        
+        # Search for top N matching playbooks
+        results = self.store.search(
+            query=search_text,
+            n_results=n,
+            cloud_provider=finding.cloud_provider.value,
+        )
+        
+        return results if results else []
 
     def match_batch(self, findings: list[Finding]) -> list[MatchResult]:
         """

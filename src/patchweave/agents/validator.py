@@ -244,10 +244,21 @@ class ValidatorAgent:
             # Get terraform outputs
             tf_outputs = self._get_terraform_outputs(tf_dir)
             
-            # Get the bucket name from terraform output or token_mapping as fallback
-            bucket_name = tf_outputs.get("bucket_name", token_mapping.get("BUCKET_NAME", "test-vulnerable-bucket"))
+            # Get the resource identifier based on resource type
+            resource_type = tf_outputs.get("resource_type", "s3_bucket")
             
-            log.info("terraform_environment_ready", bucket_name=bucket_name)
+            # Extract the appropriate resource identifier
+            bucket_name = tf_outputs.get("bucket_name", token_mapping.get("BUCKET_NAME", "test-vulnerable-bucket"))
+            security_group_id = tf_outputs.get("security_group_id")
+            volume_id = tf_outputs.get("volume_id")
+            
+            # Log the appropriate resource identifier based on type
+            if resource_type == "ebs_volume" and volume_id:
+                log.info("terraform_environment_ready", resource_type=resource_type, volume_id=volume_id)
+            elif resource_type == "security_group" and security_group_id:
+                log.info("terraform_environment_ready", resource_type=resource_type, security_group_id=security_group_id)
+            else:
+                log.info("terraform_environment_ready", resource_type=resource_type, bucket_name=bucket_name)
             
             # Parse outputs
             return {
@@ -256,7 +267,10 @@ class ValidatorAgent:
                 "created_at": datetime.utcnow().isoformat(),
                 "resources": self._parse_terraform_state(tf_dir),
                 "apply_output": apply_output,
-                "bucket_name": bucket_name,  # Pass bucket name for code execution
+                "bucket_name": bucket_name,  # For S3 playbooks
+                "security_group_id": security_group_id,  # For security group playbooks
+                "volume_id": volume_id,  # For EBS playbooks
+                "resource_type": resource_type,  # To determine which param to use
                 "token_mapping": token_mapping,  # Keep original mapping
                 "terraform_outputs": tf_outputs,
             }
@@ -328,6 +342,7 @@ provider "aws" {{
         unique_suffix = str(uuid.uuid4())[:8]
         
         # S3 Bucket without encryption (for s3_encryption_disabled)
+        # LocalStack enables encryption by default, so we must delete it after creation
         if vuln_type == "s3_encryption_disabled":
             bucket_name = f"test-vuln-{unique_suffix}"
             return f'''
@@ -336,8 +351,22 @@ resource "aws_s3_bucket" "vulnerable" {{
   force_destroy = true
 }}
 
+# LocalStack enables encryption by default - we need to remove it
+# to simulate an unencrypted bucket for validation
+resource "null_resource" "remove_encryption" {{
+  depends_on = [aws_s3_bucket.vulnerable]
+  
+  provisioner "local-exec" {{
+    command = "AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test aws --endpoint-url={self.localstack_endpoint} s3api delete-bucket-encryption --bucket {bucket_name} --region us-east-1 || true"
+  }}
+}}
+
 output "bucket_name" {{
   value = aws_s3_bucket.vulnerable.bucket
+}}
+
+output "resource_type" {{
+  value = "s3_bucket"
 }}
 '''
         
@@ -361,6 +390,32 @@ resource "aws_s3_bucket_public_access_block" "vulnerable" {{
 
 output "bucket_name" {{
   value = aws_s3_bucket.vulnerable.bucket
+}}
+
+output "resource_type" {{
+  value = "s3_bucket"
+}}
+'''
+        
+        # S3 Bucket without versioning (for s3_versioning_disabled)
+        elif vuln_type == "s3_versioning_disabled":
+            bucket_name = f"test-noversioning-{unique_suffix}"
+            return f'''
+resource "aws_s3_bucket" "vulnerable" {{
+  bucket        = "{bucket_name}"
+  force_destroy = true
+}}
+
+# Explicitly ensure versioning is DISABLED (this is the vulnerable state)
+# Note: AWS S3 buckets have versioning disabled by default, so not adding
+# aws_s3_bucket_versioning resource means versioning stays disabled
+
+output "bucket_name" {{
+  value = aws_s3_bucket.vulnerable.bucket
+}}
+
+output "resource_type" {{
+  value = "s3_bucket"
 }}
 '''
         
@@ -386,6 +441,32 @@ resource "aws_security_group" "vulnerable" {
 
 output "security_group_id" {
   value = aws_security_group.vulnerable.id
+}
+
+output "resource_type" {
+  value = "security_group"
+}
+'''
+        
+        # EBS Volume without encryption
+        elif vuln_type == "ebs_unencrypted":
+            return '''
+resource "aws_ebs_volume" "vulnerable" {
+  availability_zone = "us-east-1a"
+  size              = 8
+  encrypted         = false
+  
+  tags = {
+    Name = "test-unencrypted-volume"
+  }
+}
+
+output "volume_id" {
+  value = aws_ebs_volume.vulnerable.id
+}
+
+output "resource_type" {
+  value = "ebs_volume"
 }
 '''
         
@@ -418,7 +499,7 @@ output "status" {
                 cwd=working_dir,
                 capture_output=True,
                 text=True,
-                timeout=180,  # 3 minute timeout
+                timeout=settings.terraform_timeout_seconds,
             )
             
             if result.returncode != 0:
@@ -431,7 +512,7 @@ output "status" {
                     stdout=result.stdout[:2000] if result.stdout else None,  # Truncate for logging
                     return_code=result.returncode,
                 )
-                raise TerraformError(f"Terraform failed (rc={result.returncode}): {error_detail[:500]}")
+                raise TerraformError(f"Terraform failed (rc={result.returncode}): {error_detail[:settings.terraform_output_truncate_length]}")
                 
             return result.stdout
             
@@ -563,6 +644,8 @@ output "status" {
         
         This MUST be called in a finally block to guarantee
         cleanup runs even if validation fails.
+        
+        If terraform destroy fails, auto-restarts LocalStack and retries.
         """
         log.info(
             "cleaning_up_environment",
@@ -584,7 +667,33 @@ output "status" {
                     workflow_id=state.workflow_id,
                     error=str(e),
                 )
-                # Continue to cleanup the directory even if destroy fails
+                
+                # Auto-restart LocalStack and retry destroy
+                if self._restart_localstack_container():
+                    log.info(
+                        "localstack_restarted_retrying_destroy",
+                        workflow_id=state.workflow_id,
+                    )
+                    try:
+                        # Wait for LocalStack to be ready
+                        import time
+                        time.sleep(5)
+                        
+                        # Retry terraform destroy
+                        self._run_terraform_command(
+                            ["destroy", "-auto-approve"],
+                            tf_dir,
+                        )
+                        log.info(
+                            "terraform_destroy_succeeded_after_restart",
+                            workflow_id=state.workflow_id,
+                        )
+                    except Exception as retry_error:
+                        log.error(
+                            "terraform_destroy_retry_failed",
+                            workflow_id=state.workflow_id,
+                            error=str(retry_error),
+                        )
             finally:
                 # ALWAYS clean up the temp directory
                 shutil.rmtree(tf_dir, ignore_errors=True)
@@ -593,6 +702,52 @@ output "status" {
             "destroyed": True,
             "destroyed_at": datetime.utcnow().isoformat(),
         }
+    
+    def _restart_localstack_container(self) -> bool:
+        """
+        Restart the LocalStack TEST container.
+        
+        Returns:
+            True if restart succeeded, False otherwise
+        """
+        container_name = settings.localstack_test_container_name or "localstack_test"
+        
+        log.info(
+            "restarting_localstack_container",
+            container_name=container_name,
+        )
+        
+        try:
+            import subprocess
+            
+            # Try docker restart
+            result = subprocess.run(
+                ["docker", "restart", container_name],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            
+            if result.returncode == 0:
+                log.info(
+                    "localstack_container_restarted",
+                    container_name=container_name,
+                )
+                return True
+            else:
+                log.error(
+                    "localstack_restart_failed",
+                    container_name=container_name,
+                    stderr=result.stderr,
+                )
+                return False
+                
+        except Exception as e:
+            log.error(
+                "localstack_restart_error",
+                container_name=container_name,
+                error=str(e),
+            )
     
     def _substitute_tokens(
         self,
@@ -635,7 +790,14 @@ output "status" {
         NOTE: In production, this would use a proper sandbox
         (e.g., RestrictedPython, subprocess isolation).
         """
-        log.info("executing_code", code_length=len(code), bucket_name=environment.get("bucket_name"))
+        # Log the appropriate resource identifier based on what's in the environment
+        resource_type = environment.get("resource_type", "s3_bucket")
+        if resource_type == "ebs_volume":
+            log.info("executing_code", code_length=len(code), volume_id=environment.get("volume_id"))
+        elif resource_type == "security_group":
+            log.info("executing_code", code_length=len(code), security_group_id=environment.get("security_group_id"))
+        else:
+            log.info("executing_code", code_length=len(code), bucket_name=environment.get("bucket_name"))
         
         # Set AWS credentials for LocalStack (required even though LocalStack doesn't validate them)
         import os
@@ -659,31 +821,32 @@ output "status" {
             # Execute the code
             exec(code, namespace)
             
-            # Get bucket name from environment
-            bucket_name = environment.get("bucket_name", "test-bucket")
+            # Get resource identifiers from environment
             endpoint_url = environment.get("endpoint_url", self.localstack_endpoint)
+            
+            # Build kwargs based on what's available in the environment
+            kwargs = {"endpoint_url": endpoint_url}
+            
+            # Add resource-specific identifiers
+            if environment.get("bucket_name"):
+                kwargs["bucket_name"] = environment["bucket_name"]
+            if environment.get("security_group_id"):
+                kwargs["security_group_id"] = environment["security_group_id"]
+            if environment.get("volume_id"):
+                kwargs["volume_id"] = environment["volume_id"]
             
             # Look for result in namespace
             if "result" in namespace:
                 return namespace["result"]
             elif "pre_check" in namespace:
-                # Call pre_check function
-                return namespace["pre_check"](
-                    bucket_name=bucket_name,
-                    endpoint_url=endpoint_url,
-                )
+                # Call pre_check function with appropriate kwargs
+                return namespace["pre_check"](**kwargs)
             elif "remediate" in namespace:
-                # Call remediate function
-                return namespace["remediate"](
-                    bucket_name=bucket_name,
-                    endpoint_url=endpoint_url,
-                )
+                # Call remediate function with appropriate kwargs
+                return namespace["remediate"](**kwargs)
             elif "post_check" in namespace:
-                # Call post_check function
-                return namespace["post_check"](
-                    bucket_name=bucket_name,
-                    endpoint_url=endpoint_url,
-                )
+                # Call post_check function with appropriate kwargs
+                return namespace["post_check"](**kwargs)
             else:
                 return {"executed": True}
                 

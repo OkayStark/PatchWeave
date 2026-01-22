@@ -108,12 +108,14 @@ def verify_match(state: WorkflowState) -> dict[str, Any]:
             state.analyzed_finding.vulnerability_type
         )
         
-        approved = types_match or state.match_similarity >= 0.80
+        # Use moderate confidence threshold from settings for verification approval
+        verification_threshold = settings.moderate_confidence_threshold + 0.10  # 0.80 by default
+        approved = types_match or state.match_similarity >= verification_threshold
         reason = (
             "Vulnerability types match" if types_match
-            else "High similarity score despite type mismatch"
+            else f"High similarity score ({state.match_similarity:.2f} >= {verification_threshold})"
             if approved
-            else "Vulnerability type mismatch and low similarity"
+            else f"Vulnerability type mismatch and low similarity ({state.match_similarity:.2f})"
         )
         
         state.add_event(

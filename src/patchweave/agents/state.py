@@ -174,6 +174,10 @@ class WorkflowState(BaseModel):
         default=None,
         description="Who approved (if approved)"
     )
+    approved_at: datetime | None = Field(
+        default=None,
+        description="When approval was given"
+    )
     rejection_reason: str = Field(
         default="",
         description="Reason for rejection (if rejected)"
@@ -191,6 +195,24 @@ class WorkflowState(BaseModel):
     deployed_at: datetime | None = Field(
         default=None,
         description="When production deployment completed"
+    )
+    
+    # LLM exhaustion and human selection (for moderate confidence when LLM unavailable)
+    llm_exhausted: bool = Field(
+        default=False,
+        description="Whether LLM was unavailable during analysis"
+    )
+    human_selection_pending: bool = Field(
+        default=False,
+        description="Whether waiting for human to select playbook"
+    )
+    human_selected_playbook: Playbook | None = Field(
+        default=None,
+        description="Playbook selected by human (if LLM unavailable)"
+    )
+    pending_playbook_options: list = Field(
+        default_factory=list,
+        description="Top playbooks awaiting human selection"
     )
     
     # Metadata
