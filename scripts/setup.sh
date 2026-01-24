@@ -25,7 +25,7 @@ echo "║   ██╔═══╝ ██╔══██║   ██║   ██�
 echo "║   ██║     ██║  ██║   ██║   ╚██████╗██║  ██║╚███╔███╔╝███████╗     ║"
 echo "║   ╚═╝     ╚═╝  ╚═╝   ╚═╝    ╚═════╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚══════╝     ║"
 echo "║                                                                   ║"
-echo "║   Setup Script - Intelligent Cloud Security Remediation          ║"
+echo "║   Setup Script - Intelligent Cloud Security Remediation           ║"
 echo "║                                                                   ║"
 echo "╚═══════════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"

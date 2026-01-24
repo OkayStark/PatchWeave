@@ -44,17 +44,17 @@ echo -e "   ${RED}❌ VULNERABLE${NC} - Encryption removed"
 echo ""
 
 # 4. Open SSH to 0.0.0.0/0 on security group
-echo -e "${YELLOW}4. Opening SSH (port 22) to 0.0.0.0/0 on sg-4ca629f51d14a60ff...${NC}"
+echo -e "${YELLOW}4. Opening SSH (port 22) to 0.0.0.0/0 on sg-a0b773a428b1cc158...${NC}"
 # First revoke existing SSH rules
 aws --endpoint-url=$ENDPOINT ec2 revoke-security-group-ingress \
-    --group-id sg-4ca629f51d14a60ff \
+    --group-id sg-a0b773a428b1cc158 \
     --protocol tcp \
     --port 22 \
     --cidr 10.0.0.0/8 2>/dev/null || true
 
 # Add vulnerable SSH rule
 aws --endpoint-url=$ENDPOINT ec2 authorize-security-group-ingress \
-    --group-id sg-4ca629f51d14a60ff \
+    --group-id sg-a0b773a428b1cc158 \
     --protocol tcp \
     --port 22 \
     --cidr 0.0.0.0/0 2>/dev/null || true
@@ -62,7 +62,7 @@ echo -e "   ${RED}❌ VULNERABLE${NC} - SSH open to 0.0.0.0/0"
 echo ""
 
 # 5. EBS Volume - Note about encryption
-echo -e "${YELLOW}5. EBS Volume vol-af3858cec3cbb3a55...${NC}"
+echo -e "${YELLOW}5. EBS Volume vol-3dbee0135891be189...${NC}"
 echo -e "   ${RED}❌ VULNERABLE${NC} - Already unencrypted (cannot un-encrypt a volume)"
 echo ""
 
@@ -74,6 +74,6 @@ echo "Resources ready for PatchWeave demo:"
 echo "  • test-vulnerable-bucket    - No public access block"
 echo "  • prod-data-bucket          - Versioning suspended"
 echo "  • unencrypted-data-bucket   - No encryption"
-echo "  • sg-4ca629f51d14a60ff      - SSH open to 0.0.0.0/0"
-echo "  • vol-af3858cec3cbb3a55     - Unencrypted"
+echo "  • sg-a0b773a428b1cc158      - SSH open to 0.0.0.0/0"
+echo "  • vol-3dbee0135891be189     - Unencrypted"
 echo ""

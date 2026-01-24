@@ -55,9 +55,9 @@ check_environment() {
     fi
     echo ""
     
-    # 4. Security Group SSH (sg-4ca629f51d14a60ff)
-    echo -e "${YELLOW}4. Security Group: sg-4ca629f51d14a60ff (SSH Access)${NC}"
-    CIDR=$(aws --endpoint-url=$ENDPOINT ec2 describe-security-groups --group-ids sg-4ca629f51d14a60ff --query 'SecurityGroups[0].IpPermissions[?FromPort==`22`].IpRanges[].CidrIp' --output text 2>/dev/null || echo "NOT_FOUND")
+    # 4. Security Group SSH (sg-a0b773a428b1cc158)
+    echo -e "${YELLOW}4. Security Group: sg-a0b773a428b1cc158 (SSH Access)${NC}"
+    CIDR=$(aws --endpoint-url=$ENDPOINT ec2 describe-security-groups --group-ids sg-a0b773a428b1cc158 --query 'SecurityGroups[0].IpPermissions[?FromPort==`22`].IpRanges[].CidrIp' --output text 2>/dev/null || echo "NOT_FOUND")
     if [ "$CIDR" = "0.0.0.0/0" ]; then
         echo -e "   ${RED}❌ VULNERABLE${NC} - SSH open to 0.0.0.0/0"
     elif [ "$CIDR" = "NOT_FOUND" ] || [ -z "$CIDR" ]; then
@@ -67,11 +67,11 @@ check_environment() {
     fi
     echo ""
     
-    # 5. EBS Volume Encryption (vol-af3858cec3cbb3a55)
-    echo -e "${YELLOW}5. EBS Volume: vol-af3858cec3cbb3a55 (Encryption)${NC}"
+    # 5. EBS Volume Encryption (vol-3dbee0135891be189)
+    echo -e "${YELLOW}5. EBS Volume: vol-3dbee0135891be189 (Encryption)${NC}"
     
     # Check if original volume is encrypted
-    ORIG_ENC=$(aws --endpoint-url=$ENDPOINT ec2 describe-volumes --volume-ids vol-af3858cec3cbb3a55 --query 'Volumes[0].Encrypted' --output text 2>/dev/null || echo "NOT_FOUND")
+    ORIG_ENC=$(aws --endpoint-url=$ENDPOINT ec2 describe-volumes --volume-ids vol-3dbee0135891be189 --query 'Volumes[0].Encrypted' --output text 2>/dev/null || echo "NOT_FOUND")
     
     # Check if PatchWeave created an encrypted replacement volume (tagged with CreatedBy: PatchWeave)
     REMEDIATED_VOL=$(aws --endpoint-url=$ENDPOINT ec2 describe-volumes \
