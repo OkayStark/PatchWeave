@@ -527,7 +527,7 @@ with open('playbooks/your-playbook.yaml') as f:
 
 ```bash
 python -c "
-from patchweave.knowledge.loader import PlaybookLoader
+from patchweave.core.loader import PlaybookLoader
 
 loader = PlaybookLoader()
 playbooks = loader.load_all()
@@ -549,7 +549,7 @@ aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
 # Run playbook test
 python -c "
 from patchweave.agents.validator import ValidatorAgent
-from patchweave.knowledge.loader import PlaybookLoader
+from patchweave.core.loader import PlaybookLoader
 
 loader = PlaybookLoader()
 playbooks = loader.load_from_file('playbooks/s3-encryption.yaml')
@@ -564,19 +564,19 @@ print(result)
 
 ```bash
 python -c "
-from patchweave.knowledge.chromadb_client import ChromaDBClient
-from patchweave.knowledge.loader import PlaybookLoader
+from patchweave.core.chromadb import PlaybookStore
+from patchweave.core.loader import PlaybookLoader
 
 # Load playbooks
 loader = PlaybookLoader()
 playbooks = loader.load_all()
 
 # Index in ChromaDB
-client = ChromaDBClient()
-client.add_playbooks(playbooks)
+store = PlaybookStore()
+store.add_playbooks(playbooks)
 
 # Test search
-results = client.search('S3 bucket without encryption enabled', n_results=3)
+results = store.search('S3 bucket without encryption enabled', n_results=3)
 for r in results:
     print(f'{r.playbook.id}: {r.similarity_score:.2f}')
 "

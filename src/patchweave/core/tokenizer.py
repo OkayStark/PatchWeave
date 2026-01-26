@@ -10,7 +10,6 @@ This is critical for:
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
 
 from patchweave.logging import get_logger
 from patchweave.models.finding import TokenMapping

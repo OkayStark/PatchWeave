@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/LangGraph-0.1.x-green.svg" alt="LangGraph">
   <img src="https://img.shields.io/badge/FastAPI-0.100+-teal.svg" alt="FastAPI">
-  <img src="https://img.shields.io/badge/tests-268%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-271%20passing-brightgreen.svg" alt="Tests">
 </p>
 
 ---
@@ -142,7 +142,7 @@ LLM_MODEL=gemini-1.5-flash
 
 # ChromaDB (local embedded mode - free)
 CHROMADB_HOST=localhost
-CHROMADB_PORT=8001
+CHROMADB_PORT=8000
 
 # LocalStack (for validation - free)
 LOCALSTACK_ENDPOINT=http://localhost:4566
@@ -175,25 +175,30 @@ Access the interactive API documentation at \`http://localhost:8000/docs\`
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | \`/health\` | GET | Health check |
-| \`/api/v1/findings\` | GET | List all findings |
-| \`/api/v1/findings/submit\` | POST | Submit a new finding |
-| \`/api/v1/findings/{id}\` | GET | Get finding details |
-| \`/api/v1/stats\` | GET | Get system statistics |
-| \`/api/v1/stats/detailed\` | GET | Get detailed breakdown |
-| \`/api/v1/stats/learning\` | GET | Get learning statistics |
+| `/ready` | GET | Readiness check |
+| `/live` | GET | Liveness check |
+| `/findings` | GET | List all findings |
+| `/findings/{id}` | GET | Get finding details |
+| `/findings/{id}/retry` | POST | Retry failed finding |
+| `/findings/{id}/cancel` | POST | Cancel processing |
+| `/playbooks` | GET | List all playbooks |
+| `/playbooks/{id}` | GET | Get playbook details |
+| `/queue` | GET | Get queue status |
+| `/stats` | GET | Get system statistics |
+| `/stats/detailed` | GET | Get detailed breakdown |
+| `/stats/learning` | GET | Get learning statistics |
 
-### Example: Submit a Finding
+### Example: Query the API
 
 \`\`\`bash
-curl -X POST http://localhost:8000/api/v1/findings/submit \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "jira_ticket_id": "SEC-1234",
-    "jira_ticket_url": "https://org.atlassian.net/browse/SEC-1234",
-    "title": "S3 bucket has public access enabled",
-    "description": "The S3 bucket prod-logs has Block Public Access disabled.",
-    "severity": "Critical"
-  }'
+# Get system statistics
+curl http://localhost:8000/stats
+
+# Get finding details
+curl http://localhost:8000/findings/SEC-1234
+
+# List all playbooks
+curl http://localhost:8000/playbooks
 \`\`\`
 
 ## 🔍 Supported Vulnerability Types
@@ -245,11 +250,13 @@ patchweave/
 │   ├── api/              # FastAPI endpoints
 │   ├── approval/         # Approval handler
 │   ├── core/             # Core utilities
+│   │   ├── chromadb.py   # ChromaDB client
+│   │   ├── loader.py     # Playbook loader
+│   │   ├── matcher.py    # Playbook matcher
+│   │   ├── queue.py      # Finding queue
+│   │   └── tokenizer.py  # Data tokenizer
 │   ├── integrations/     # External integrations
 │   │   └── jira.py       # Jira client
-│   ├── knowledge/        # Knowledge base
-│   │   ├── chromadb_client.py
-│   │   └── loader.py     # Playbook loader
 │   ├── learning/         # Learning loop
 │   ├── models/           # Pydantic models
 │   ├── config.py         # Configuration

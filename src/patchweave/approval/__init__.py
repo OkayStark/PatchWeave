@@ -17,7 +17,6 @@ from patchweave.agents.state import (
     WorkflowPhase,
     WorkflowState,
 )
-from patchweave.config import settings
 from patchweave.integrations.jira import JiraClient
 from patchweave.logging import get_logger
 from patchweave.models.enums import JiraStatus

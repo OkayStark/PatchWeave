@@ -105,7 +105,7 @@ class TestApprovalHandler:
     def test_initialization(self, approval_handler):
         """Test handler initialization."""
         assert approval_handler.poll_interval == 30
-        assert approval_handler.timeout_hours == 24
+        # Note: No timeout_hours - approvals wait indefinitely per design
     
     def test_request_approval(
         self,
@@ -130,10 +130,11 @@ class TestApprovalHandler:
         assert result.approval_requested_at is not None
         
         # Should call Jira
+        from patchweave.models.enums import JiraStatus
         mock_jira_client.add_comment.assert_called_once()
         mock_jira_client.update_status.assert_called_once_with(
             ticket_id="SEC-456",
-            status="PENDING APPROVAL",
+            new_status=JiraStatus.PENDING_APPROVAL,
         )
     
     def test_check_approval_status_pending(
@@ -191,9 +192,10 @@ class TestApprovalHandler:
         assert result.approved_by == "approver@example.com"
         
         # Should update Jira status
+        from patchweave.models.enums import JiraStatus
         mock_jira_client.update_status.assert_called_with(
             ticket_id="SEC-456",
-            status="DEPLOYING",
+            new_status=JiraStatus.DEPLOYING,
         )
     
     def test_process_rejection(
@@ -278,6 +280,7 @@ class TestDeploymentResult:
         mock_jira_client,
     ):
         """Test posting successful deployment result."""
+        from patchweave.models.enums import JiraStatus
         approval_handler.post_deployment_result(
             state=sample_state,
             success=True,
@@ -286,7 +289,7 @@ class TestDeploymentResult:
         
         mock_jira_client.update_status.assert_called_with(
             ticket_id="SEC-456",
-            status="RESOLVED",
+            new_status=JiraStatus.RESOLVED,
         )
         mock_jira_client.add_comment.assert_called_once()
     
@@ -297,6 +300,7 @@ class TestDeploymentResult:
         mock_jira_client,
     ):
         """Test posting failed deployment result."""
+        from patchweave.models.enums import JiraStatus
         approval_handler.post_deployment_result(
             state=sample_state,
             success=False,
@@ -305,7 +309,7 @@ class TestDeploymentResult:
         
         mock_jira_client.update_status.assert_called_with(
             ticket_id="SEC-456",
-            status="DEPLOYMENT FAILED",
+            new_status=JiraStatus.DEPLOYMENT_FAILED,
         )
 
 

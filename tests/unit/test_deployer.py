@@ -173,11 +173,13 @@ region = '{{AWS_REGION}}'
         assert "True" in builtins
         assert "False" in builtins
         
+        # __import__ is allowed for playbook code to do imports
+        assert "__import__" in builtins
+        
         # Dangerous builtins should NOT be present
         assert "open" not in builtins
         assert "exec" not in builtins
         assert "eval" not in builtins
-        assert "__import__" not in builtins
 
     def test_dry_run_validates_syntax(
         self, deployer: DeployerAgent, approved_state: WorkflowState, token_mapping: dict

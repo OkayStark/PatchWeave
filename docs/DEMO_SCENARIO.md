@@ -26,7 +26,7 @@ python -m patchweave --mode api-only --host 0.0.0.0 --port 8000
 curl http://localhost:4566/_localstack/health
 
 # Check ChromaDB
-curl http://localhost:8001/api/v1/heartbeat
+curl http://localhost:8000/api/v1/heartbeat
 
 # Check PatchWeave API
 curl http://localhost:8000/health
@@ -37,15 +37,15 @@ curl http://localhost:8000/health
 ```bash
 # Load all playbooks into ChromaDB
 python -c "
-from patchweave.knowledge.loader import PlaybookLoader
-from patchweave.knowledge.chromadb_client import ChromaDBClient
+from patchweave.core.loader import PlaybookLoader
+from patchweave.core.chromadb import PlaybookStore
 
 loader = PlaybookLoader()
 playbooks = loader.load_all()
 print(f'Loaded {len(playbooks)} playbooks')
 
-client = ChromaDBClient()
-client.add_playbooks(playbooks)
+store = PlaybookStore()
+store.add_playbooks(playbooks)
 print('Playbooks indexed in ChromaDB')
 "
 ```

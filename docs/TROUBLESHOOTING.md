@@ -229,7 +229,7 @@ JiraClientError: Transition not available
 
 **Symptom:**
 ```
-ConnectionError: Cannot connect to ChromaDB at localhost:8001
+ConnectionError: Cannot connect to ChromaDB at localhost:8000
 ```
 
 **Solution:**
@@ -244,7 +244,7 @@ docker-compose restart chromadb
 docker-compose logs chromadb
 
 # Verify port
-curl http://localhost:8001/api/v1/heartbeat
+curl http://localhost:8000/api/v1/heartbeat
 ```
 
 ### Playbooks Not Found
@@ -258,21 +258,21 @@ No playbooks matched the query
 
 1. Verify playbooks are loaded:
 ```python
-from patchweave.knowledge.loader import PlaybookLoader
-from patchweave.knowledge.chromadb_client import ChromaDBClient
+from patchweave.core.loader import PlaybookLoader
+from patchweave.core.chromadb import PlaybookStore
 
 loader = PlaybookLoader()
 playbooks = loader.load_all()
 print(f"Loaded {len(playbooks)} playbooks")
 
-client = ChromaDBClient()
-client.add_playbooks(playbooks)
+store = PlaybookStore()
+store.add_playbooks(playbooks)
 ```
 
 2. Check collection exists:
 ```python
-client = ChromaDBClient()
-count = client.count()
+store = PlaybookStore()
+count = store.count()
 print(f"Playbooks in ChromaDB: {count}")
 ```
 
@@ -752,7 +752,7 @@ Quick system health check:
 # All services
 curl http://localhost:8000/health
 curl http://localhost:4566/_localstack/health
-curl http://localhost:8001/api/v1/heartbeat
+curl http://localhost:8000/api/v1/heartbeat
 
 # Run validation
 python scripts/validate_phase5.py

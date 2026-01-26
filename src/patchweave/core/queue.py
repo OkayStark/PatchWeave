@@ -15,7 +15,7 @@ from enum import Enum
 from typing import Callable, Awaitable
 
 from patchweave.integrations.jira import JiraClient, get_jira_client
-from patchweave.logging import get_logger, audit_log
+from patchweave.logging import get_logger
 from patchweave.models.enums import JiraStatus
 from patchweave.models.finding import AnalyzedFinding, RawFinding
 

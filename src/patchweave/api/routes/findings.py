@@ -5,7 +5,7 @@ Findings endpoints for PatchWeave API.
 from datetime import datetime
 from typing import Optional, List, Any
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from patchweave.logging import get_logger

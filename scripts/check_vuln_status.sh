@@ -2,6 +2,7 @@
 # ============================================================================
 # PatchWeave - Vulnerability Status Checker
 # Checks status of 5 resources in both TEST (4566) and PROD (4567) environments
+# Dynamically discovers Security Group and EBS Volume IDs
 # ============================================================================
 
 set -e
@@ -55,37 +56,51 @@ check_environment() {
     fi
     echo ""
     
-    # 4. Security Group SSH (sg-a0b773a428b1cc158)
-    echo -e "${YELLOW}4. Security Group: sg-a0b773a428b1cc158 (SSH Access)${NC}"
-    CIDR=$(aws --endpoint-url=$ENDPOINT ec2 describe-security-groups --group-ids sg-a0b773a428b1cc158 --query 'SecurityGroups[0].IpPermissions[?FromPort==`22`].IpRanges[].CidrIp' --output text 2>/dev/null || echo "NOT_FOUND")
-    if [ "$CIDR" = "0.0.0.0/0" ]; then
-        echo -e "   ${RED}❌ VULNERABLE${NC} - SSH open to 0.0.0.0/0"
-    elif [ "$CIDR" = "NOT_FOUND" ] || [ -z "$CIDR" ]; then
-        echo -e "   ${GREEN}✅ SECURED${NC} - No SSH rule found"
+    # 4. Security Group SSH (dynamically find prod-web-sg)
+    SG_ID=$(aws --endpoint-url=$ENDPOINT ec2 describe-security-groups \
+        --filters "Name=group-name,Values=prod-web-sg" \
+        --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "NOT_FOUND")
+    
+    echo -e "${YELLOW}4. Security Group: prod-web-sg [$SG_ID] (SSH Access)${NC}"
+    if [ "$SG_ID" = "None" ] || [ "$SG_ID" = "NOT_FOUND" ] || [ -z "$SG_ID" ]; then
+        echo -e "   ${YELLOW}⚠️  NOT FOUND${NC} - Security group doesn't exist"
     else
-        echo -e "   ${GREEN}✅ SECURED${NC} - SSH restricted to $CIDR"
+        CIDR=$(aws --endpoint-url=$ENDPOINT ec2 describe-security-groups --group-ids $SG_ID --query 'SecurityGroups[0].IpPermissions[?FromPort==`22`].IpRanges[].CidrIp' --output text 2>/dev/null || echo "NONE")
+        if [ "$CIDR" = "0.0.0.0/0" ]; then
+            echo -e "   ${RED}❌ VULNERABLE${NC} - SSH open to 0.0.0.0/0"
+        elif [ -z "$CIDR" ] || [ "$CIDR" = "NONE" ]; then
+            echo -e "   ${GREEN}✅ SECURED${NC} - No SSH rule found"
+        else
+            echo -e "   ${GREEN}✅ SECURED${NC} - SSH restricted to $CIDR"
+        fi
     fi
     echo ""
     
-    # 5. EBS Volume Encryption (vol-3dbee0135891be189)
-    echo -e "${YELLOW}5. EBS Volume: vol-3dbee0135891be189 (Encryption)${NC}"
+    # 5. EBS Volume Encryption (dynamically find prod-data-volume)
+    VOL_ID=$(aws --endpoint-url=$ENDPOINT ec2 describe-volumes \
+        --filters "Name=tag:Name,Values=prod-data-volume" \
+        --query 'Volumes[0].VolumeId' --output text 2>/dev/null || echo "NOT_FOUND")
     
-    # Check if original volume is encrypted
-    ORIG_ENC=$(aws --endpoint-url=$ENDPOINT ec2 describe-volumes --volume-ids vol-3dbee0135891be189 --query 'Volumes[0].Encrypted' --output text 2>/dev/null || echo "NOT_FOUND")
+    echo -e "${YELLOW}5. EBS Volume: prod-data-volume [$VOL_ID] (Encryption)${NC}"
     
-    # Check if PatchWeave created an encrypted replacement volume (tagged with CreatedBy: PatchWeave)
-    REMEDIATED_VOL=$(aws --endpoint-url=$ENDPOINT ec2 describe-volumes \
-        --filters "Name=tag:CreatedBy,Values=PatchWeave" "Name=encrypted,Values=true" \
-        --query 'Volumes[0].VolumeId' --output text 2>/dev/null || echo "None")
-    
-    if [ "$ORIG_ENC" = "True" ]; then
-        echo -e "   ${GREEN}✅ SECURED${NC} - Original volume is encrypted"
-    elif [ "$REMEDIATED_VOL" != "None" ] && [ -n "$REMEDIATED_VOL" ]; then
-        echo -e "   ${GREEN}✅ SECURED${NC} - Encrypted replacement: $REMEDIATED_VOL"
-    elif [ "$ORIG_ENC" = "NOT_FOUND" ]; then
+    if [ "$VOL_ID" = "None" ] || [ "$VOL_ID" = "NOT_FOUND" ] || [ -z "$VOL_ID" ]; then
         echo -e "   ${YELLOW}⚠️  NOT FOUND${NC} - Volume doesn't exist"
     else
-        echo -e "   ${RED}❌ VULNERABLE${NC} - Volume not encrypted (no remediation found)"
+        # Check if original volume is encrypted
+        ORIG_ENC=$(aws --endpoint-url=$ENDPOINT ec2 describe-volumes --volume-ids $VOL_ID --query 'Volumes[0].Encrypted' --output text 2>/dev/null || echo "NOT_FOUND")
+        
+        # Check if PatchWeave created an encrypted replacement volume (tagged with CreatedBy: PatchWeave)
+        REMEDIATED_VOL=$(aws --endpoint-url=$ENDPOINT ec2 describe-volumes \
+            --filters "Name=tag:CreatedBy,Values=PatchWeave" "Name=encrypted,Values=true" \
+            --query 'Volumes[0].VolumeId' --output text 2>/dev/null || echo "None")
+        
+        if [ "$ORIG_ENC" = "True" ]; then
+            echo -e "   ${GREEN}✅ SECURED${NC} - Volume is encrypted"
+        elif [ "$REMEDIATED_VOL" != "None" ] && [ -n "$REMEDIATED_VOL" ]; then
+            echo -e "   ${GREEN}✅ SECURED${NC} - Encrypted replacement: $REMEDIATED_VOL"
+        else
+            echo -e "   ${RED}❌ VULNERABLE${NC} - Volume not encrypted"
+        fi
     fi
     echo ""
 }

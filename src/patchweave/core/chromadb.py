@@ -5,7 +5,6 @@ Provides semantic search capabilities for matching findings
 to remediation playbooks using vector embeddings.
 """
 
-import uuid
 from typing import Any
 
 import chromadb

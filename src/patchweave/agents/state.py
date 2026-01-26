@@ -8,11 +8,10 @@ validation pipeline: analyze → match → validate → approve → deploy.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Annotated
+from typing import Any
 
 from pydantic import BaseModel, Field
 
-from patchweave.models.enums import Severity, VulnerabilityType
 from patchweave.models.finding import AnalyzedFinding
 from patchweave.models.playbook import Playbook
 

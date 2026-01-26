@@ -14,7 +14,6 @@ from botocore.exceptions import ClientError
 
 from patchweave.agents.state import (
     ApprovalStatus,
-    WorkflowPhase,
     WorkflowState,
 )
 from patchweave.config import settings

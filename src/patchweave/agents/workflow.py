@@ -6,7 +6,7 @@ remediation workflow: analyze → match → validate → approve → deploy.
 """
 
 from datetime import datetime
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -16,14 +16,12 @@ from patchweave.agents.deployer import get_deployer
 from patchweave.agents.state import (
     ApprovalStatus,
     MatchTier,
-    ValidationStage,
-    ValidationStatus,
     WorkflowPhase,
     WorkflowState,
 )
 from patchweave.agents.validator import get_validator
 from patchweave.config import settings
-from patchweave.core.matcher import PlaybookMatcher, get_matcher
+from patchweave.core.matcher import get_matcher
 from patchweave.logging import get_logger
 
 log = get_logger(__name__)

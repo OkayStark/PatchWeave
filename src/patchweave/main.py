@@ -13,7 +13,6 @@ Main application that orchestrates the full remediation pipeline:
 import asyncio
 import shutil
 import signal
-import subprocess
 import sys
 import threading
 from collections import deque
