@@ -312,7 +312,7 @@ async def run_demo(dry_run: bool = True, scenarios: list[int] | None = None):
     print("  ✓ Jira: Ready (simulated)")
     print()
     
-    input("Press Enter to start the demo scenarios...")
+    # input("Press Enter to start the demo scenarios...")  # Skip for non-interactive
     
     # Run selected or all scenarios
     scenarios_to_run = scenarios or list(range(len(DEMO_SCENARIOS)))
@@ -330,7 +330,7 @@ async def run_demo(dry_run: bool = True, scenarios: list[int] | None = None):
         
         if i < total:
             print()
-            input("Press Enter for next scenario...")
+            # input("Press Enter for next scenario...")  # Skip for non-interactive
     
     # Show statistics
     await run_statistics_demo()
