@@ -25,26 +25,51 @@ PatchWeave is a production-grade security remediation system that automatically 
 
 ## 🏗️ Architecture
 
-\`\`\`
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              PatchWeave System                               │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌─────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌────────┐  │
-│  │  Jira   │───▶│ Analyzer │───▶│ Matcher  │───▶│Validator │───▶│Deployer│  │
-│  │ Polling │    │  Agent   │    │  Agent   │    │  Agent   │    │ Agent  │  │
-│  └─────────┘    └──────────┘    └──────────┘    └──────────┘    └────────┘  │
-│       │              │                │               │              │       │
-│       │         Tokenizer         ChromaDB       LocalStack       Boto3      │
-│       │              │                │               │              │       │
-│       ▼              ▼                ▼               ▼              ▼       │
-│  ┌─────────────────────────────────────────────────────────────────────────┐ │
-│  │                         LangGraph Workflow                               │ │
-│  │  INGESTION → ANALYSIS → MATCHING → VALIDATION → APPROVAL → DEPLOYMENT   │ │
-│  └─────────────────────────────────────────────────────────────────────────┘ │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-\`\`\`
+```mermaid
+graph TD
+    subgraph System["PatchWeave System"]
+        subgraph Agents["Agent Pipeline"]
+            A["🔗 Jira<br/>Polling"]
+            B["🧠 Analyzer<br/>Agent"]
+            C["🎯 Matcher<br/>Agent"]
+            D["✅ Validator<br/>Agent"]
+            E["🚀 Deployer<br/>Agent"]
+        end
+        
+        subgraph Services["Support Services"]
+            T["Tokenizer"]
+            CH["ChromaDB"]
+            LS["LocalStack"]
+            B3["Boto3"]
+        end
+        
+        subgraph Workflow["LangGraph Workflow"]
+            F["INGESTION → ANALYSIS → MATCHING → VALIDATION → APPROVAL → DEPLOYMENT"]
+        end
+        
+        A --> B --> C --> D --> E
+        A -.-> T
+        B -.-> T
+        C -.-> CH
+        D -.-> LS
+        E -.-> B3
+    end
+    
+    style System fill:#1a202c,stroke:#48bb78,stroke-width:3px,color:#fff
+    style Agents fill:#2d3748,stroke:#4299e1,stroke-width:2px,color:#fff
+    style Services fill:#2d3748,stroke:#ed8936,stroke-width:2px,color:#fff
+    style Workflow fill:#2d3748,stroke:#48bb78,stroke-width:2px,color:#fff
+    style A fill:#4a5568,color:#fff
+    style B fill:#4a5568,color:#fff
+    style C fill:#4a5568,color:#fff
+    style D fill:#4a5568,color:#fff
+    style E fill:#4a5568,color:#fff
+    style T fill:#5a6b79,color:#fff
+    style CH fill:#5a6b79,color:#fff
+    style LS fill:#5a6b79,color:#fff
+    style B3 fill:#5a6b79,color:#fff
+    style F fill:#3d4556,color:#48bb78
+```
 
 ## 📦 Quick Start
 
