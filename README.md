@@ -84,14 +84,14 @@ graph TD
 
 ### One-Command Setup
 
-\`\`\`bash
+```bash
 # Clone the repository
 git clone https://github.com/yourorg/patchweave.git
 cd patchweave
 
 # Run the setup script (does everything!)
 ./scripts/setup.sh
-\`\`\`
+```
 
 The setup script will:
 1. ✅ Check all prerequisites
@@ -103,7 +103,7 @@ The setup script will:
 
 ### Manual Installation
 
-\`\`\`bash
+```bash
 # Clone the repository
 git clone https://github.com/yourorg/patchweave.git
 cd patchweave
@@ -127,7 +127,7 @@ make docker-health
 
 # Run the application
 python -m patchweave
-\`\`\`
+```
 
 ### Required Credentials in .env
 
@@ -138,14 +138,13 @@ python -m patchweave
 | `JIRA_API_TOKEN` | Jira API token | [Create here](https://id.atlassian.com/manage-profile/security/api-tokens) |
 | `JIRA_PROJECT_KEY` | Project key | e.g., `SEC`, `KAN` |
 | `GOOGLE_API_KEY` | Gemini API key | [Get free key](https://aistudio.google.com/apikey) |
-python -m patchweave
-\`\`\`
+
 
 ## ⚙️ Configuration
 
-Create a \`.env\` file:
+Create a `.env` file:
 
-\`\`\`bash
+```bash
 # Core Settings
 PATCHWEAVE_ENV=development
 PATCHWEAVE_DRY_RUN=true
@@ -176,13 +175,13 @@ USE_LOCALSTACK=true
 # Matching Thresholds
 MATCH_THRESHOLD_HIGH=0.90
 MATCH_THRESHOLD_MODERATE=0.70
-\`\`\`
+```
 
 ## 🎮 Usage
 
 ### Running PatchWeave
 
-\`\`\`bash
+```bash
 # Full system mode (Jira polling + API)
 python -m patchweave
 
@@ -191,15 +190,15 @@ python -m patchweave --mode api-only
 
 # With custom host/port
 python -m patchweave --host 0.0.0.0 --port 8080
-\`\`\`
+```
 
 ### API Endpoints
 
-Access the interactive API documentation at \`http://localhost:8000/docs\`
+Access the interactive API documentation at `http://localhost:8000/docs`
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| \`/health\` | GET | Health check |
+| `/health` | GET | Health check |
 | `/ready` | GET | Readiness check |
 | `/live` | GET | Liveness check |
 | `/findings` | GET | List all findings |
@@ -215,7 +214,7 @@ Access the interactive API documentation at \`http://localhost:8000/docs\`
 
 ### Example: Query the API
 
-\`\`\`bash
+```bash
 # Get system statistics
 curl http://localhost:8000/stats
 
@@ -224,28 +223,28 @@ curl http://localhost:8000/findings/SEC-1234
 
 # List all playbooks
 curl http://localhost:8000/playbooks
-\`\`\`
+```
 
 ## 🔍 Supported Vulnerability Types
 
 | Type | Description | Severity |
 |------|-------------|----------|
-| \`s3_public_access\` | S3 bucket with public access | Critical |
-| \`s3_encryption_disabled\` | S3 bucket without encryption | High |
-| \`security_group_open_port\` | SG with unrestricted access | High |
-| \`rds_public_access\` | RDS instance publicly accessible | Critical |
-| \`rds_encryption_disabled\` | RDS without encryption | High |
-| \`ec2_imdsv1\` | EC2 using IMDSv1 | Medium |
-| \`iam_user_no_mfa\` | IAM user without MFA | High |
-| \`kms_key_rotation\` | KMS key rotation disabled | Medium |
-| \`ebs_encryption\` | EBS volume unencrypted | High |
-| \`cloudtrail_disabled\` | CloudTrail logging disabled | High |
-| \`guardduty_disabled\` | GuardDuty not enabled | Medium |
-| \`vpc_flow_logs\` | VPC flow logs disabled | Medium |
+| `s3_public_access` | S3 bucket with public access | Critical |
+| `s3_encryption_disabled` | S3 bucket without encryption | High |
+| `security_group_open_port` | SG with unrestricted access | High |
+| `rds_public_access` | RDS instance publicly accessible | Critical |
+| `rds_encryption_disabled` | RDS without encryption | High |
+| `ec2_imdsv1` | EC2 using IMDSv1 | Medium |
+| `iam_user_no_mfa` | IAM user without MFA | High |
+| `kms_key_rotation` | KMS key rotation disabled | Medium |
+| `ebs_encryption` | EBS volume unencrypted | High |
+| `cloudtrail_disabled` | CloudTrail logging disabled | High |
+| `guardduty_disabled` | GuardDuty not enabled | Medium |
+| `vpc_flow_logs` | VPC flow logs disabled | Medium |
 
 ## 🧪 Testing
 
-\`\`\`bash
+```bash
 # Run all tests
 pytest
 
@@ -258,11 +257,11 @@ python scripts/validate_phase2.py
 python scripts/validate_phase3.py
 python scripts/validate_phase4.py
 python scripts/validate_phase5.py
-\`\`\`
+```
 
 ## 📁 Project Structure
 
-\`\`\`
+```
 patchweave/
 ├── src/patchweave/
 │   ├── agents/           # LangGraph agents
@@ -291,7 +290,7 @@ patchweave/
 ├── tests/                # Test suite
 ├── docs/                 # Documentation
 └── scripts/              # Utility scripts
-\`\`\`
+```
 
 ## 📚 Documentation
 
@@ -324,7 +323,7 @@ patchweave/
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Run tests: \`pytest\`
+4. Run tests: `pytest`
 5. Submit a pull request
 
 ## 📄 License
