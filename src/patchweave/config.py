@@ -131,7 +131,7 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     llm_provider: str = Field(
         default="gemini",
-        description="LLM provider to use: 'gemini' or 'openai'",
+        description="LLM provider to use: 'gemini', 'openai', or 'ollama'",
     )
     use_llm: bool = Field(
         default=True,
@@ -155,11 +155,15 @@ class Settings(BaseSettings):
     )
     llm_model: str = Field(
         default="gemini-1.5-flash",
-        description="LLM model to use (gemini-1.5-flash for free tier, or gpt-4-turbo-preview for OpenAI)",
+        description="LLM model to use (gemini-1.5-flash for free tier, gpt-4-turbo-preview for OpenAI, or a local model tag like qwen2.5:14b for Ollama)",
     )
     llm_temperature: float = Field(
         default=0.0,
         description="LLM temperature for generation",
+    )
+    ollama_base_url: str = Field(
+        default="http://localhost:11434",
+        description="Base URL for a locally running Ollama server",
     )
 
     # -------------------------------------------------------------------------

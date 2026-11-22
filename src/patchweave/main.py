@@ -337,12 +337,28 @@ class PreflightChecker:
         """Check LLM availability (warning only)."""
         if not settings.use_llm:
             return False, "LLM disabled in settings (USE_LLM=false)"
-        
-        # Check if at least one API key is configured
+
+        provider = settings.llm_provider.lower()
+
+        if provider == "ollama":
+            try:
+                response = requests.get(f"{settings.ollama_base_url}/api/tags", timeout=5)
+                if response.status_code == 200:
+                    return True, f"Connected to Ollama at {settings.ollama_base_url}"
+                return False, f"Ollama unreachable: HTTP {response.status_code}"
+            except requests.RequestException as e:
+                return False, f"Ollama not reachable at {settings.ollama_base_url}: {e}"
+
+        if provider == "openai":
+            if not settings.openai_api_key:
+                return False, "No OPENAI_API_KEY configured"
+            return True, "OpenAI API key configured"
+
+        # Default: gemini
         keys = [k for k in [settings.google_api_key, settings.google_api_key_2, settings.google_api_key_3] if k]
         if not keys:
             return False, "No API keys configured"
-        
+
         # Optionally test API key validity (lightweight check)
         # Skip actual API call to avoid rate limits during startup
         return True, f"{len(keys)} API key(s) configured"

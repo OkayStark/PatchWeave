@@ -48,7 +48,22 @@ check_command() {
 
 check_command "python3" "Install from https://www.python.org/downloads/"
 check_command "docker" "Install from https://docs.docker.com/get-docker/"
-check_command "docker-compose" "Install from https://docs.docker.com/compose/install/"
+
+# Detect docker compose as either the standalone binary (docker-compose) or
+# the modern Docker CLI plugin (docker compose) - macOS/Docker Desktop ships
+# the plugin form by default and often doesn't have the hyphenated binary.
+if command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+    echo -e "${GREEN}✓ docker-compose is installed${NC}"
+elif docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+    echo -e "${GREEN}✓ docker compose (plugin) is installed${NC}"
+else
+    echo -e "${RED}✗ Neither docker-compose nor docker compose plugin found${NC}"
+    echo "  Install from https://docs.docker.com/compose/install/"
+    exit 1
+fi
+
 check_command "terraform" "Install from https://developer.hashicorp.com/terraform/downloads"
 check_command "aws" "Install from https://aws.amazon.com/cli/"
 
@@ -110,12 +125,19 @@ fi
 echo ""
 echo -e "${YELLOW}[5/7] Starting Docker services...${NC}"
 
-docker-compose up -d localstack-test localstack-prod chromadb
+$DOCKER_COMPOSE up -d localstack-test localstack-prod chromadb
 echo -e "${GREEN}✓ Started LocalStack (TEST:4566, PROD:4567) and ChromaDB${NC}"
 
 # Wait for services to be ready
 echo "  Waiting for services to be healthy..."
-sleep 10
+for i in $(seq 1 30); do
+    if curl -s http://localhost:4566/_localstack/health | grep -q "\"s3\": \"running\"" && \
+       curl -s http://localhost:4567/_localstack/health | grep -q "\"s3\": \"running\"" && \
+       curl -s http://localhost:8000/api/v1/heartbeat | grep -q "nanosecond"; then
+        break
+    fi
+    sleep 2
+done
 
 # -----------------------------------------------------------------------------
 # Verify Services

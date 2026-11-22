@@ -77,6 +77,7 @@ langchain-classic==1.0.1
 langchain-community==0.4.1
 langchain-core==1.2.7
 langchain-google-genai==4.2.0
+langchain-ollama==1.1.0
 langchain-openai==1.1.7
 langchain-text-splitters==1.1.0
 langgraph==1.0.6
@@ -100,6 +101,7 @@ networkx==3.6.1
 nodeenv==1.10.0
 numpy==2.4.1
 oauthlib==3.3.1
+ollama==0.6.2
 onnxruntime==1.23.2
 openai==2.15.0
 openapi-schema-validator==0.6.3
@@ -115,7 +117,6 @@ ormsgpack==1.12.1
 overrides==7.7.0
 packaging==25.0
 # Editable Git install with no remote (patchweave==1.0.0)
--e /home/stark/PatchWeave
 pathable==0.4.4
 platformdirs==4.5.1
 pluggy==1.6.0

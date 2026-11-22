@@ -66,7 +66,7 @@ check_environment() {
         echo -e "   ${YELLOW}⚠️  NOT FOUND${NC} - Security group doesn't exist"
     else
         CIDR=$(aws --endpoint-url=$ENDPOINT ec2 describe-security-groups --group-ids $SG_ID --query 'SecurityGroups[0].IpPermissions[?FromPort==`22`].IpRanges[].CidrIp' --output text 2>/dev/null || echo "NONE")
-        if [ "$CIDR" = "0.0.0.0/0" ]; then
+        if echo "$CIDR" | grep -qw "0.0.0.0/0"; then
             echo -e "   ${RED}❌ VULNERABLE${NC} - SSH open to 0.0.0.0/0"
         elif [ -z "$CIDR" ] || [ "$CIDR" = "NONE" ]; then
             echo -e "   ${GREEN}✅ SECURED${NC} - No SSH rule found"

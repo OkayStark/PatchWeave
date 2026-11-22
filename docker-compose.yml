@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # ============================================================================
   # LocalStack TEST - Validation Environment (port 4566)
@@ -57,7 +55,7 @@ services:
   # ChromaDB - Vector Database for Playbooks
   # ============================================================================
   chromadb:
-    image: chromadb/chroma:0.4.22
+    image: chromadb/chroma:0.5.15
     container_name: patchweave-chromadb
     ports:
       - "8000:8000"

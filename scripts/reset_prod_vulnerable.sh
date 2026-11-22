@@ -145,17 +145,19 @@ echo ""
 
 # 4. Open SSH to 0.0.0.0/0 on security group
 echo -e "${YELLOW}4. Opening SSH (port 22) to 0.0.0.0/0 on $SG_ID...${NC}"
-# First revoke any existing SSH rules (ignore errors)
-aws --endpoint-url=$ENDPOINT ec2 revoke-security-group-ingress \
-    --group-id $SG_ID \
-    --protocol tcp \
-    --port 22 \
-    --cidr 10.0.0.0/8 2>/dev/null || true
-aws --endpoint-url=$ENDPOINT ec2 revoke-security-group-ingress \
-    --group-id $SG_ID \
-    --protocol tcp \
-    --port 22 \
-    --cidr 0.0.0.0/0 2>/dev/null || true
+# Revoke whatever port-22 rules currently exist, matching them exactly
+# (revoke-security-group-ingress matches on the full rule including any
+# Description, so a plain --cidr revoke silently no-ops against a rule
+# PatchWeave added with a Description - e.g. the restricted-CIDR remediation
+# rule - leaving it stacked alongside the newly-opened 0.0.0.0/0 rule).
+EXISTING_SSH_RULES=$(aws --endpoint-url=$ENDPOINT ec2 describe-security-groups \
+    --group-ids $SG_ID \
+    --query 'SecurityGroups[0].IpPermissions[?FromPort==`22`]' --output json 2>/dev/null)
+if [ -n "$EXISTING_SSH_RULES" ] && [ "$EXISTING_SSH_RULES" != "[]" ]; then
+    aws --endpoint-url=$ENDPOINT ec2 revoke-security-group-ingress \
+        --group-id $SG_ID \
+        --ip-permissions "$EXISTING_SSH_RULES" 2>/dev/null || true
+fi
 
 # Add vulnerable SSH rule
 aws --endpoint-url=$ENDPOINT ec2 authorize-security-group-ingress \
@@ -166,8 +168,19 @@ aws --endpoint-url=$ENDPOINT ec2 authorize-security-group-ingress \
 echo -e "   ${RED}❌ VULNERABLE${NC} - SSH open to 0.0.0.0/0"
 echo ""
 
-# 5. EBS Volume is already unencrypted
+# 5. EBS Volume is already unencrypted. Delete any encrypted replacement
+# volume left over from a prior PatchWeave remediation run - the
+# ebs_encryption playbook creates a new encrypted volume instead of
+# modifying the original, so a stale one causes check_vuln_status.sh's
+# "remediated replacement" check to false-positive as SECURED.
 echo -e "${YELLOW}5. EBS Volume $VOL_ID...${NC}"
+STALE_VOLS=$(aws --endpoint-url=$ENDPOINT ec2 describe-volumes \
+    --filters "Name=tag:CreatedBy,Values=PatchWeave" \
+    --query 'Volumes[].VolumeId' --output text 2>/dev/null || echo "")
+for stale_vol in $STALE_VOLS; do
+    aws --endpoint-url=$ENDPOINT ec2 delete-volume --volume-id "$stale_vol" 2>/dev/null || true
+    echo -e "   ${GREEN}✓${NC} Removed stale remediated volume: $stale_vol"
+done
 echo -e "   ${RED}❌ VULNERABLE${NC} - Created without encryption"
 echo ""
 
@@ -185,8 +198,14 @@ echo "  • unencrypted-data-bucket   - No encryption"
 echo "  • $SG_ID      - SSH open to 0.0.0.0/0"
 echo "  • $VOL_ID     - Unencrypted"
 echo ""
-echo -e "${YELLOW}NOTE: Security Group and Volume IDs are dynamic after LocalStack restart.${NC}"
-echo -e "${YELLOW}      Update check_vuln_status.sh if needed with:${NC}"
-echo -e "        SG_ID=$SG_ID"
-echo -e "        VOL_ID=$VOL_ID"
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${CYAN}  JIRA TICKET VALUES (paste these into your 2 dynamic tickets)${NC}"
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e "  ${YELLOW}EBS Volume ticket${NC}       Volume ID: ${GREEN}$VOL_ID${NC}"
+echo -e "  ${YELLOW}Security Group ticket${NC}   Security Group ID: ${GREEN}$SG_ID${NC}"
+echo ""
+echo "  These only need updating if this ID differs from what's currently"
+echo "  in the ticket. They stay stable across reruns of this script as"
+echo "  long as ./localstack_prod_data isn't wiped (no 'docker compose down -v')."
 echo ""

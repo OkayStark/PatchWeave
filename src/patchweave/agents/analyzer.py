@@ -178,8 +178,15 @@ class AnalyzerAgent:
                 temperature=self.temperature,
                 api_key=settings.openai_api_key,
             )
+        elif provider == "ollama":
+            from langchain_ollama import ChatOllama
+            return ChatOllama(
+                model=self.model,
+                temperature=self.temperature,
+                base_url=settings.ollama_base_url,
+            )
         else:
-            raise ValueError(f"Unknown LLM provider: {provider}. Use 'gemini' or 'openai'.")
+            raise ValueError(f"Unknown LLM provider: {provider}. Use 'gemini', 'openai', or 'ollama'.")
 
     @property
     def llm(self):
